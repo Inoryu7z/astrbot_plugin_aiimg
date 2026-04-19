@@ -1372,9 +1372,9 @@ class GiteeAIImagePlugin(Star):
 
     # ==================== LLM 工具 ====================
 
-    @filter.llm_tool(name="gitee_draw_image")
-    async def gitee_draw_image(self, event: AstrMessageEvent, prompt: str):
-        """（兼容旧版本）根据提示词生成图片。
+    @filter.llm_tool(name="aiimg_draw")
+    async def aiimg_draw(self, event: AstrMessageEvent, prompt: str):
+        """根据提示词生成图片。
 
         Args:
             prompt(string): 图片提示词，需要包含主体、场景、风格等描述
@@ -1383,15 +1383,15 @@ class GiteeAIImagePlugin(Star):
             event, prompt=prompt, mode="text", backend="auto"
         )
 
-    @filter.llm_tool(name="gitee_edit_image")
-    async def gitee_edit_image(
+    @filter.llm_tool(name="aiimg_edit")
+    async def aiimg_edit(
             self,
             event: AstrMessageEvent,
             prompt: str,
             use_message_images: bool = True,
             backend: str = "auto",
     ):
-        """（兼容旧版本）编辑用户发送的图片或引用的图片。
+        """编辑用户发送的图片或引用的图片。
 
         Args:
             prompt(string): 图片编辑提示词
@@ -1492,7 +1492,7 @@ class GiteeAIImagePlugin(Star):
                     size=size,
                     resolution=resolution,
                 )
-                return await self._finalize_llm_tool_image(event, image_path)
+                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
 
             # 自动模式：优先识别"自拍"语义 + 已配置参考照
             if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
@@ -1520,7 +1520,7 @@ class GiteeAIImagePlugin(Star):
                             e,
                         )
                     else:
-                        return await self._finalize_llm_tool_image(event, image_path)
+                        return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
 
             # 改图：用户消息中有图片（不含头像兜底）或显式指定
             has_msg_images = await self._has_message_images(event)
@@ -1564,7 +1564,7 @@ class GiteeAIImagePlugin(Star):
                     size=size,
                     resolution=resolution,
                 )
-                return await self._finalize_llm_tool_image(event, image_path)
+                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
 
             # 默认：文生图
             draw_conf = self._get_feature("draw")
@@ -1584,7 +1584,7 @@ class GiteeAIImagePlugin(Star):
                 size=size,
                 resolution=resolution,
             )
-            return await self._finalize_llm_tool_image(event, image_path)
+            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
 
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
@@ -1593,8 +1593,8 @@ class GiteeAIImagePlugin(Star):
         finally:
             await self._end_user_job(user_id, kind="image")
 
-    @filter.llm_tool()
-    async def grok_generate_video(self, event: AstrMessageEvent, prompt: str):
+    @filter.llm_tool(name="aiimg_video")
+    async def aiimg_video(self, event: AstrMessageEvent, prompt: str):
         """根据用户发送/引用的图片生成视频。
 
         Args:
@@ -2076,9 +2076,12 @@ class GiteeAIImagePlugin(Star):
         conf = self.config.get("llm_tool", {}) if isinstance(self.config, dict) else {}
         return conf if isinstance(conf, dict) else {}
 
-    def _is_llm_tool_image_context_enabled(self) -> bool:
+    def _get_image_context_mode(self) -> str:
         conf = self._get_llm_tool_conf()
-        return self._as_bool(conf.get("return_images_to_context", False), default=False)
+        mode = str(conf.get("image_context_mode", "image")).strip().lower()
+        if mode not in ("image", "text", "none"):
+            mode = "image"
+        return mode
 
     async def _ensure_tool_image_cache_dir(self) -> None:
         tool_image_dir = Path(get_astrbot_temp_path()) / "tool_images"
@@ -2087,25 +2090,19 @@ class GiteeAIImagePlugin(Star):
     async def _build_llm_tool_image_result(
             self, image_path: Path
     ) -> mcp.types.CallToolResult | None:
-        """构建返回给LLM上下文的图片结果（压缩版）"""
         try:
-            # 调用压缩方法
             compressed_bytes = await asyncio.to_thread(
                 self._compress_for_llm_context, image_path, max_side=2048, quality=85
             )
-
             if not compressed_bytes:
                 return None
-
-            # 转base64
             b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
-
             return mcp.types.CallToolResult(
                 content=[
                     mcp.types.ImageContent(
                         type="image",
                         data=b64_data,
-                        mimeType="image/jpeg",  # ← 关键：改成 mimeType
+                        mimeType="image/jpeg",
                     )
                 ]
             )
@@ -2113,27 +2110,23 @@ class GiteeAIImagePlugin(Star):
             logger.warning("[aiimg_generate] 构建LLM图片结果失败: %s", e)
             return None
 
+    @staticmethod
+    def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
+        desc = str(prompt or "").strip()
+        text = f"发送了一张图片" + (f"：{desc}" if desc else "")
+        return mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text=text)]
+        )
+
     async def _finalize_llm_tool_image(
             self,
             event: AstrMessageEvent,
             image_path: Path,
+            *,
+            prompt: str = "",
     ) -> mcp.types.CallToolResult | None:
-        """
-        构建返回给LLM上下文的图片结果。
-
-        流程：
-        1. 记录最后生成的图片路径（用于 /重发图片）
-        2. 发送无损原图给用户
-        3. 如果启用，返回压缩图给LLM上下文
-
-        注意：
-        - 用户始终看到的是无损原图
-        - LLM拿到的是压缩图（适配模型输入限制）
-        """
-        # 1. 记录图片路径
         self._remember_last_image(event, image_path)
 
-        # 2. ✅ 关键：无论如何都要先发送无损原图给用户
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
             await self._signal_llm_tool_failure(event)
@@ -2143,22 +2136,24 @@ class GiteeAIImagePlugin(Star):
             )
             return None
 
-        # 标记成功（用户已看到原图）
         await mark_success(event)
 
-        # 3. 如果启用了返回图片到LLM上下文，返回压缩图
-        if self._is_llm_tool_image_context_enabled():
-            await self._ensure_tool_image_cache_dir()
-            result = await self._build_llm_tool_image_result(image_path)
-            if result is not None:
-                # 返回压缩图给LLM，用于生成回复
-                return result
-            logger.warning(
-                "[aiimg_generate] LLM上下文图片构建失败，降级为无图回复"
-            )
+        mode = self._get_image_context_mode()
 
-        # 4. 如果没启用或构建失败，返回None（LLM只会回复文本）
-        return None
+        if mode == "none":
+            return None
+
+        if mode == "text":
+            return self._build_llm_tool_text_desc_result(prompt)
+
+        await self._ensure_tool_image_cache_dir()
+        result = await self._build_llm_tool_image_result(image_path)
+        if result is not None:
+            return result
+        logger.warning(
+            "[aiimg_generate] LLM上下文图片构建失败，降级为文字描述"
+        )
+        return self._build_llm_tool_text_desc_result(prompt)
 
     def _get_selfie_ref_store_key(self, event: AstrMessageEvent) -> str:
         """用于 ReferenceStore 的固定 key（按 bot self_id 隔离）。"""

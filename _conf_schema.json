@@ -298,11 +298,11 @@
     "description": "LLM 工具调用行为",
     "type": "object",
     "items": {
-      "return_images_to_context": {
-        "type": "bool",
-        "description": "将自然语言生成的图片返回给 LLM 上下文",
-        "hint": "开启后，aiimg_generate 不再直接发图，而是把图片返回给 Agent 上下文，便于识别图片内容并保留本轮对话连续性。默认关闭。",
-        "default": false
+      "image_context_mode": {
+        "type": "string",
+        "description": "图片生成后返回给 LLM 上下文的方式",
+        "hint": "image=返回压缩图给LLM（LLM可识别图片内容并回复）；text=返回提示词文字描述给LLM；none=不返回任何内容给LLM。默认 image。",
+        "default": "image"
       }
     }
   },
