@@ -588,13 +588,13 @@
             "type": "string",
             "description": "GraphQL key（高级）",
             "hint": "一般无需修改；除非上游变更。",
-            "default": ""
+            "default": "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g"
           },
           "query_signature": {
             "type": "string",
             "description": "querySignature（高级）",
             "hint": "一般无需修改；除非上游变更。",
-            "default": ""
+            "default": "2/l8eCsMMY49imcDQ/lwwXyL8cYtTjxZBF2dNqy69LodY="
           },
           "system_prompt": {
             "type": "text",
