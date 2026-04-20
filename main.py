@@ -410,218 +410,6 @@ class GiteeAIImagePlugin(Star):
             )
             return None
 
-    def _is_selfie_enabled(self) -> bool:
-        conf = self._get_feature("selfie")
-        return self._as_bool(conf.get("enabled", True), default=True)
-
-    def _is_selfie_llm_enabled(self) -> bool:
-        conf = self._get_feature("selfie")
-        return self._as_bool(conf.get("llm_tool_enabled", True), default=True)
-
-    @staticmethod
-    def _selfie_disabled_message() -> str:
-        return "自拍参考图模式已关闭（features.selfie.enabled=false）"
-
-    async def _send_image_with_fallback(
-            self, event: AstrMessageEvent, image_path: Path, *, max_attempts: int = 5
-    ) -> SendImageResult:
-        """Send image with retries and fallback to base64 bytes.
-
-        Avoids wasting generation credits when platform send fails transiently.
-        """
-        p = Path(image_path)
-
-        if not p.exists():
-            logger.warning("[send_image] file not found: %s", p)
-            return SendImageResult(ok=False, reason="file_not_found", cached_path=p)
-
-        # Large original images (e.g. 4K 20MB+) are likely to fail rich-media upload.
-        # Prefer sending as a normal file first so the original bytes are preserved.
-        try:
-            size_bytes = int(p.stat().st_size)
-        except Exception:
-            size_bytes = 0
-
-        file_send_tries = 0
-
-        async def try_send_as_file(trigger: str) -> bool:
-            nonlocal file_send_tries
-            if file_send_tries >= 2:
-                return False
-            file_send_tries += 1
-            try:
-                await event.send(event.chain_result([File(name=p.name, file=str(p))]))
-                logger.info(
-                    "[send_image][file-fallback-v2] file send success: %s (%s bytes), trigger=%s, try=%s",
-                    p.name,
-                    size_bytes,
-                    trigger,
-                    file_send_tries,
-                )
-                return True
-            except Exception as e:
-                logger.warning(
-                    "[send_image][file-fallback-v2] file send failed: trigger=%s, try=%s, err=%s",
-                    trigger,
-                    file_send_tries,
-                    e,
-                )
-                return False
-
-        if size_bytes > self.IMAGE_AS_FILE_THRESHOLD_BYTES:
-            if await try_send_as_file("size_threshold"):
-                return SendImageResult(ok=True, cached_path=p, used_fallback=True)
-
-        delay = 1.5
-        last_exc: Exception | None = None
-        attempts = max(1, int(max_attempts))
-        rich_media_failures = 0
-        compact_bytes: bytes | None = None
-        compact_prepared = False
-        for attempt in range(1, attempts + 1):
-            fs_exc: Exception | None = None
-            bytes_exc: Exception | None = None
-            compact_exc: Exception | None = None
-            fs_failed_by_rich_media = False
-
-            try:
-                await event.send(event.chain_result([Image.fromFileSystem(str(p))]))
-                return SendImageResult(ok=True, cached_path=p, used_fallback=False)
-            except Exception as e:
-                fs_exc = e
-                last_exc = e
-                if self._is_rich_media_transfer_failed(e):
-                    fs_failed_by_rich_media = True
-                logger.debug(
-                    "[send_image] fromFileSystem failed (attempt=%s/%s): %s",
-                    attempt,
-                    attempts,
-                    e,
-                )
-
-            try:
-                data = await asyncio.to_thread(p.read_bytes)
-                await event.send(event.chain_result([Image.fromBytes(data)]))
-                if fs_exc is not None:
-                    logger.info(
-                        "[send_image] fromBytes fallback succeeded (attempt=%s/%s).",
-                        attempt,
-                        attempts,
-                    )
-                return SendImageResult(ok=True, cached_path=p, used_fallback=True)
-            except Exception as e:
-                bytes_exc = e
-                last_exc = e
-                logger.debug(
-                    "[send_image] fromBytes failed (attempt=%s/%s): %s",
-                    attempt,
-                    attempts,
-                    e,
-                )
-
-            # If rich-media channel is failing, immediately try original-file sending.
-            if self._is_rich_media_transfer_failed(
-                    fs_exc
-            ) or self._is_rich_media_transfer_failed(bytes_exc):
-                if await try_send_as_file("rich_media_transfer_failed"):
-                    return SendImageResult(ok=True, cached_path=p, used_fallback=True)
-
-            # Extra fallback for repeated rich-media failures: compress and retry by bytes.
-            if self._is_rich_media_transfer_failed(
-                    fs_exc
-            ) or self._is_rich_media_transfer_failed(bytes_exc):
-                if not compact_prepared:
-                    compact_prepared = True
-                    compact_bytes = await asyncio.to_thread(
-                        self._build_compact_image_bytes, p
-                    )
-                    if compact_bytes:
-                        logger.info(
-                            "[send_image] prepared compact fallback image: %s -> %s bytes",
-                            p,
-                            len(compact_bytes),
-                        )
-                if compact_bytes:
-                    try:
-                        await event.send(
-                            event.chain_result([Image.fromBytes(compact_bytes)])
-                        )
-                        logger.info(
-                            "[send_image] compact fromBytes fallback succeeded (attempt=%s/%s).",
-                            attempt,
-                            attempts,
-                        )
-                        return SendImageResult(
-                            ok=True, cached_path=p, used_fallback=True
-                        )
-                    except Exception as e:
-                        compact_exc = e
-                        last_exc = e
-                        logger.debug(
-                            "[send_image] compact fromBytes failed (attempt=%s/%s): %s",
-                            attempt,
-                            attempts,
-                            e,
-                        )
-
-            attempt_has_rich_media = (
-                    self._is_rich_media_transfer_failed(fs_exc)
-                    or self._is_rich_media_transfer_failed(bytes_exc)
-                    or self._is_rich_media_transfer_failed(compact_exc)
-            )
-            if attempt_has_rich_media:
-                rich_media_failures += 1
-
-            if fs_exc is not None and bytes_exc is not None and compact_exc is not None:
-                logger.debug(
-                    "[send_image] attempt=%s/%s failed on all channels.",
-                    attempt,
-                    attempts,
-                )
-            elif fs_exc is not None and bytes_exc is not None:
-                logger.debug(
-                    "[send_image] attempt=%s/%s failed on both channels.",
-                    attempt,
-                    attempts,
-                )
-            elif fs_exc is not None and fs_failed_by_rich_media:
-                logger.debug(
-                    "[send_image] attempt=%s/%s failed by rich media transfer.",
-                    attempt,
-                    attempts,
-                )
-            else:
-                logger.debug(
-                    "[send_image] attempt=%s/%s failed to send image.",
-                    attempt,
-                    attempts,
-                )
-
-            if rich_media_failures >= 2:
-                logger.info(
-                    "[send_image] detected repeated rich media transfer failures, stop retrying early."
-                )
-                break
-
-            if attempt < attempts:
-                await asyncio.sleep(delay)
-                delay = min(delay * 1.8, 8.0)
-
-        reason = (
-            "rich_media_transfer_failed"
-            if self._is_rich_media_transfer_failed(last_exc)
-            else "send_failed"
-        )
-        logger.error(
-            "[send_image] failed after retries: reason=%s, err=%s", reason, last_exc
-        )
-        return SendImageResult(
-            ok=False,
-            reason=reason,
-            cached_path=p,
-            last_error=str(last_exc or ""),
-        )
-
     def _register_preset_commands(self):
         """动态注册预设命令
 
@@ -1030,9 +818,6 @@ class GiteeAIImagePlugin(Star):
         - /自拍 <提示词>
         - 可附带多张参考图（衣服/姿势/场景）作为额外参考
         """
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
         event.should_call_llm(True)
         prompt = self._extract_extra_prompt(event, "自拍")
         await self._do_selfie(event, prompt, backend=None)
@@ -1061,16 +846,21 @@ class GiteeAIImagePlugin(Star):
         - 发送图片 + /自拍参考 设置
         - /自拍参考 查看
         - /自拍参考 删除
+        - /自拍参考 设置 全局
+        - /自拍参考 查看 全局
+        - /自拍参考 删除 全局
         """
         event.should_call_llm(True)
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
         arg = self._extract_extra_prompt(event, "自拍参考")
-        action, _, _rest = (arg or "").strip().partition(" ")
+        action, _, rest = (arg or "").strip().partition(" ")
         action = action.strip().lower()
+        rest = rest.strip()
+
+        use_global = rest.lower() in {"全局", "global", "default"}
+        persona_name = None if use_global else await self._get_current_persona_name(event)
 
         if not action or action in {"帮助", "help", "h"}:
+            persona_hint = f"\n当前人格：{persona_name}" if persona_name else "\n当前无人格绑定"
             msg = (
                 "📸 自拍参考照\n"
                 "━━━━━━━━━━━━━━\n"
@@ -1078,23 +868,29 @@ class GiteeAIImagePlugin(Star):
                 "查看：/自拍参考 查看\n"
                 "删除：/自拍参考 删除\n"
                 "━━━━━━━━━━━━━━\n"
+                "加「全局」操作全局参考照：\n"
+                "/自拍参考 设置 全局\n"
+                "/自拍参考 查看 全局\n"
+                "/自拍参考 删除 全局\n"
+                "━━━━━━━━━━━━━━\n"
                 "生成自拍：/自拍 <提示词>\n"
                 "可附带额外参考图（衣服/姿势/场景）"
+                f"{persona_hint}"
             )
             yield event.plain_result(msg)
             return
 
         if action in {"设置", "set"}:
-            await self._set_selfie_reference(event)
+            await self._set_selfie_reference(event, persona_name=persona_name)
             return
 
         if action in {"查看", "show", "看"}:
-            async for result in self._show_selfie_reference(event):
+            async for result in self._show_selfie_reference(event, persona_name=persona_name):
                 yield result
             return
 
         if action in {"删除", "del", "delete"}:
-            await self._delete_selfie_reference(event)
+            await self._delete_selfie_reference(event, persona_name=persona_name)
             return
 
         await mark_failed(event)
@@ -1104,10 +900,6 @@ class GiteeAIImagePlugin(Star):
         """兼容“图片在前、文字在后”的消息：确保 /自拍参考 能触发。"""
         msg = (event.message_str or "").strip()
         if self._is_direct_command_message(event, ("自拍参考",)):
-            return
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            event.stop_event()
             return
         arg = self._extract_command_arg_anywhere(msg, "自拍参考")
         action, _, _rest = (arg or "").strip().partition(" ")
@@ -2069,8 +1861,31 @@ class GiteeAIImagePlugin(Star):
 
     # ==================== 自拍参考照：内部实现 ====================
 
-    def _get_selfie_conf(self) -> dict:
-        return self._get_feature("selfie")
+    def _get_selfie_persona_config(self, index: int) -> dict:
+        """获取指定索引的人格自拍配置（1 或 2）"""
+        conf = self._get_feature(f"selfie_persona_{index}")
+        return conf if isinstance(conf, dict) else {}
+
+    async def _get_current_persona_name(self, event: AstrMessageEvent) -> str | None:
+        try:
+            conv_mgr = getattr(self.context, "conversation_manager", None)
+            if not conv_mgr:
+                return None
+            umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if not umo:
+                return None
+            curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+            if not curr_cid:
+                return None
+            conversation = await conv_mgr.get_conversation(umo, curr_cid)
+            if not conversation:
+                return None
+            persona_id = getattr(conversation, "persona_id", None)
+            if persona_id:
+                return str(persona_id).strip() or None
+        except Exception as e:
+            logger.debug("[aiimg] 获取人格名失败: %s", e)
+        return None
 
     def _get_llm_tool_conf(self) -> dict:
         conf = self.config.get("llm_tool", {}) if isinstance(self.config, dict) else {}
@@ -2155,15 +1970,19 @@ class GiteeAIImagePlugin(Star):
         )
         return self._build_llm_tool_text_desc_result(prompt)
 
-    def _get_selfie_ref_store_key(self, event: AstrMessageEvent) -> str:
-        """用于 ReferenceStore 的固定 key（按 bot self_id 隔离）。"""
+    def _get_selfie_ref_store_key(
+            self, event: AstrMessageEvent, persona_name: str | None = None
+    ) -> str:
         self_id = ""
         try:
             if hasattr(event, "get_self_id"):
                 self_id = str(event.get_self_id() or "").strip()
         except Exception:
             self_id = ""
-        return f"bot_selfie_{self_id}" if self_id else "bot_selfie"
+        base = f"bot_selfie_{self_id}" if self_id else "bot_selfie"
+        if persona_name:
+            return f"{base}__persona_{persona_name}"
+        return base
 
     def _resolve_data_rel_path(self, rel_path: str) -> Path | None:
         """将 data_dir 下的相对路径解析为绝对路径，并阻止路径穿越。"""
@@ -2181,35 +2000,42 @@ class GiteeAIImagePlugin(Star):
             return None
         return target
 
-    def _get_config_selfie_reference_paths(self) -> list[Path]:
-        """从 WebUI file 配置项读取参考图路径。"""
-        conf = self._get_selfie_conf()
-        ref_list = conf.get("reference_images", [])
-        if not isinstance(ref_list, list):
-            return []
-
-        paths: list[Path] = []
-        for rel_path in ref_list:
-            p = self._resolve_data_rel_path(str(rel_path))
-            if not p:
+    def _get_persona_config_selfie_reference_paths(
+            self, persona_name: str
+    ) -> list[Path]:
+        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的参考照"""
+        for idx in [1, 2]:
+            conf = self._get_selfie_persona_config(idx)
+            if not conf:
                 continue
-            if p.is_file():
-                paths.append(p)
-        return paths
+            conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            if conf_persona != persona_name:
+                continue
+            ref_list = conf.get("reference_images", [])
+            if not isinstance(ref_list, list):
+                continue
+            paths: list[Path] = []
+            for rel_path in ref_list:
+                p = self._resolve_data_rel_path(str(rel_path))
+                if not p:
+                    continue
+                if p.is_file():
+                    paths.append(p)
+            return paths
+        return []
 
     async def _get_selfie_reference_paths(
-            self, event: AstrMessageEvent
+            self, event: AstrMessageEvent, persona_name: str | None = None
     ) -> tuple[list[Path], str]:
-        """返回(路径列表, 来源)；来源=webui/store/none"""
-        webui_paths = self._get_config_selfie_reference_paths()
-        if webui_paths:
-            return webui_paths, "webui"
-
-        store_key = self._get_selfie_ref_store_key(event)
-        store_paths = await self.refs.get_paths(store_key)
-        if store_paths:
-            return store_paths, "store"
-
+        if not persona_name:
+            return [], "none"
+        persona_webui = self._get_persona_config_selfie_reference_paths(persona_name)
+        if persona_webui:
+            return persona_webui, "webui_persona"
+        persona_key = self._get_selfie_ref_store_key(event, persona_name=persona_name)
+        persona_store_paths = await self.refs.get_paths(persona_key)
+        if persona_store_paths:
+            return persona_store_paths, "store_persona"
         return [], "none"
 
     async def _read_paths_bytes(self, paths: list[Path]) -> list[bytes]:
@@ -2281,28 +2107,28 @@ class GiteeAIImagePlugin(Star):
         if not self._is_auto_selfie_prompt(prompt):
             logger.debug("[aiimg_generate] auto-selfie skipped: prompt not selfie")
             return False
-        paths, source = await self._get_selfie_reference_paths(event)
+        persona_name = await self._get_current_persona_name(event)
+        paths, source = await self._get_selfie_reference_paths(
+            event, persona_name=persona_name
+        )
         if not paths:
             logger.info("[aiimg_generate] auto-selfie skipped: no reference images")
             return False
         logger.debug(
-            "[aiimg_generate] auto-selfie candidate: refs=%s source=%s",
+            "[aiimg_generate] auto-selfie candidate: persona=%s refs=%s source=%s",
+            persona_name,
             len(paths),
             source,
         )
         return True
 
     def _build_selfie_prompt(self, prompt: str, extra_refs: int) -> str:
-        conf = self._get_selfie_conf()
-        prefix = str(conf.get("prompt_prefix", "") or "").strip()
-        if not prefix:
-            prefix = (
-                "请根据参考图生成一张新的自拍照：\n"
-                "1) 以第1张参考图的人脸身份为准（仅人脸身份特征），保持五官/气质一致。\n"
-                "2) 如果还有其它参考图，请将它们仅作为服装/姿势/构图/场景的参考。\n"
-                "3) 输出一张高质量照片风格自拍，不要拼图，不要水印。"
-            )
-
+        prefix = (
+            "请根据参考图生成一张新的自拍照：\n"
+            "1) 以第1张参考图的人脸身份为准（仅人脸身份特征），保持五官/气质一致。\n"
+            "2) 如果还有其它参考图，请将它们仅作为服装/姿势/构图/场景的参考。\n"
+            "3) 输出一张高质量照片风格自拍，不要拼图，不要水印。"
+        )
         user_prompt = (prompt or "").strip() or "日常自拍照"
         if extra_refs > 0:
             return (
@@ -2310,31 +2136,25 @@ class GiteeAIImagePlugin(Star):
             )
         return f"{prefix}\n\n用户要求：{user_prompt}"
 
-    def _merge_selfie_chain_with_edit_chain(
-            self, selfie_chain: list[object]
-    ) -> list[dict]:
-        """将自拍链路与改图链路合并（自拍优先，去重 provider_id）。"""
-        merged: list[dict] = []
-        seen: set[str] = set()
-
-        def append_unique(items: list) -> None:
-            for item in items:
-                normalized = self._normalize_chain_item(item)
-                if not normalized:
-                    continue
-                pid = str(normalized.get("provider_id") or "").strip()
-                if not pid or pid in seen:
-                    continue
-                merged.append(normalized)
-                seen.add(pid)
-
-        append_unique(selfie_chain)
-
-        edit_chain_raw = self._get_feature("edit").get("chain", [])
-        if isinstance(edit_chain_raw, list):
-            append_unique(edit_chain_raw)
-
-        return merged
+    def _get_persona_selfie_chain(self, persona_name: str) -> list[dict] | None:
+        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的链路"""
+        for idx in [1, 2]:
+            conf = self._get_selfie_persona_config(idx)
+            if not conf:
+                continue
+            conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            if conf_persona != persona_name:
+                continue
+            provider_ids = conf.get("provider_ids", [])
+            if not isinstance(provider_ids, list):
+                continue
+            chain_items = [
+                {"provider_id": str(pid).strip()}
+                for pid in provider_ids
+                if str(pid).strip()
+            ]
+            return chain_items if chain_items else None
+        return None
 
     async def _generate_selfie_image(
             self,
@@ -2345,78 +2165,44 @@ class GiteeAIImagePlugin(Star):
             size: str | None = None,
             resolution: str | None = None,
     ) -> Path:
-        conf = self._get_selfie_conf()
-        if not self._is_selfie_enabled():
-            raise RuntimeError(self._selfie_disabled_message())
+        persona_name = await self._get_current_persona_name(event)
+        if not persona_name:
+            raise RuntimeError("当前对话未绑定人格，无法使用自拍功能。")
 
-        # 1) 读取参考照（WebUI 优先，其次命令设置的 store）
-        ref_paths, _ = await self._get_selfie_reference_paths(event)
+        ref_paths, source = await self._get_selfie_reference_paths(
+            event, persona_name=persona_name
+        )
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
             raise RuntimeError(
-                "未设置自拍参考照。请先：发送图片 + /自拍参考 设置，或在 WebUI 配置 features.selfie.reference_images 上传。"
+                f"人格「{persona_name}」未设置自拍参考照。请先：发送图片 + /自拍参考 设置，或在 WebUI 的 features.selfie_personas 中配置该人格。"
             )
 
-        # 2) 读取额外参考图（衣服/姿势/场景）
+        chain_override = self._get_persona_selfie_chain(persona_name)
+        if not chain_override:
+            raise RuntimeError(
+                f"人格「{persona_name}」未配置自拍服务商链路。请在 WebUI 的 features.selfie_personas 中为该人格添加 chain。"
+            )
+
         extra_segs = await get_images_from_event(event, include_avatar=False)
         extra_bytes = await self._image_segs_to_bytes(extra_segs)
-
-        # 3) 拼接输入图：参考照在前
         images = [*ref_images, *extra_bytes]
 
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes))
 
-        chain_override: list[dict] | None = None
-        use_edit_chain = bool(conf.get("use_edit_chain_when_empty", True))
-        raw_chain = conf.get("chain", [])
-        if isinstance(raw_chain, list):
-            chain_items = [
-                normalized
-                for normalized in (self._normalize_chain_item(x) for x in raw_chain)
-                if normalized is not None
-            ]
-            if chain_items:
-                chain_override = chain_items
-
-        if backend is None:
-            if chain_override is None:
-                if not use_edit_chain:
-                    raise RuntimeError(
-                        "No selfie provider chain configured. Please set features.selfie.chain or enable features.selfie.use_edit_chain_when_empty."
-                    )
-            elif use_edit_chain:
-                # 自拍链路可作为主链，改图链路作为补充兜底，避免“自拍链仅一项导致无兜底”。
-                chain_override = self._merge_selfie_chain_with_edit_chain(
-                    chain_override
-                )
-
-        if chain_override:
-            logger.debug(
-                "[selfie] effective providers=%s",
-                [
-                    str(x.get("provider_id") or "").strip()
-                    for x in chain_override
-                    if isinstance(x, dict)
-                ],
-            )
-
-        # 4) 千问后端可选 task_types（仅对 gitee 生效）
-        task_types = conf.get("gitee_task_types")
-        if isinstance(task_types, list) and task_types:
-            gitee_task_types = [str(x).strip() for x in task_types if str(x).strip()]
-        else:
-            gitee_task_types = ["id", "background", "style"]
-
-        default_output = str(conf.get("default_output") or "").strip() or None
+        logger.debug(
+            "[selfie] persona=%s source=%s providers=%s",
+            persona_name,
+            source,
+            [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
+        )
 
         return await self.edit.edit(
             prompt=final_prompt,
             images=images,
             backend=backend,
-            task_types=gitee_task_types,
             size=size,
             resolution=resolution,
-            default_output=default_output,
             chain_override=chain_override,
         )
 
@@ -2427,9 +2213,6 @@ class GiteeAIImagePlugin(Star):
             backend: str | None = None,
     ):
         """指令 /自拍 执行入口。"""
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
 
         user_id = str(event.get_sender_id() or "")
         request_id = self._debounce_key(event, "selfie", user_id)
@@ -2467,10 +2250,9 @@ class GiteeAIImagePlugin(Star):
         finally:
             await self._end_user_job(user_id, kind="image")
 
-    async def _set_selfie_reference(self, event: AstrMessageEvent):
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
+    async def _set_selfie_reference(
+            self, event: AstrMessageEvent, persona_name: str | None = None
+    ):
 
         image_segs = await get_images_from_event(event, include_avatar=False)
         if not image_segs:
@@ -2482,50 +2264,53 @@ class GiteeAIImagePlugin(Star):
             await mark_failed(event)
             return
 
-        # 限制数量，避免一次塞太多
         max_images = 8
         bytes_images = bytes_images[:max_images]
 
-        store_key = self._get_selfie_ref_store_key(event)
+        store_key = self._get_selfie_ref_store_key(event, persona_name=persona_name)
         try:
             await self.refs.set(store_key, bytes_images)
         except Exception:
             await mark_failed(event)
             return
 
+        persona_hint = f"（人格：{persona_name}）" if persona_name else "（全局）"
+        logger.info("[自拍参考] 已设置参考照 %s，共 %d 张", persona_hint, len(bytes_images))
         await mark_success(event)
 
-    async def _show_selfie_reference(self, event: AstrMessageEvent):
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
+    async def _show_selfie_reference(
+            self, event: AstrMessageEvent, persona_name: str | None = None
+    ):
 
-        paths, source = await self._get_selfie_reference_paths(event)
+        paths, source = await self._get_selfie_reference_paths(
+            event, persona_name=persona_name
+        )
         if not paths:
             await mark_failed(event)
             return
 
-        # 最多回显 5 张，避免刷屏
         max_show = 5
         show_paths = paths[:max_show]
         yield event.chain_result([Image.fromFileSystem(str(p)) for p in show_paths])
+        persona_hint = f"（人格：{persona_name}）" if persona_name else ""
         yield event.plain_result(
-            f"📌 当前自拍参考照来源：{source}，共 {len(paths)} 张（已展示 {len(show_paths)} 张）"
+            f"📌 当前自拍参考照{persona_hint}来源：{source}，共 {len(paths)} 张（已展示 {len(show_paths)} 张）"
         )
 
-    async def _delete_selfie_reference(self, event: AstrMessageEvent):
-        if not self._is_selfie_enabled():
-            await mark_failed(event)
-            return
+    async def _delete_selfie_reference(
+            self, event: AstrMessageEvent, persona_name: str | None = None
+    ):
 
-        store_key = self._get_selfie_ref_store_key(event)
+        store_key = self._get_selfie_ref_store_key(event, persona_name=persona_name)
         deleted = await self.refs.delete(store_key)
 
-        webui_paths = self._get_config_selfie_reference_paths()
-        if webui_paths:
-            logger.info(
-                "[自拍参考] 命令保存的参考照已删除，但 WebUI reference_images 仍生效（优先级更高）"
-            )
+        if persona_name:
+            persona_webui = self._get_persona_config_selfie_reference_paths(persona_name)
+            if persona_webui:
+                logger.info(
+                    "[自拍参考] 人格 %s 的命令参考照已删除，但 WebUI selfie_personas 仍生效",
+                    persona_name,
+                )
 
         if deleted:
             await mark_success(event)
