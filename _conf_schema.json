@@ -140,86 +140,6 @@
           }
         }
       },
-      "selfie": {
-        "description": "自拍参考照模式",
-        "type": "object",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用自拍参考照",
-            "default": true
-          },
-          "llm_tool_enabled": {
-            "type": "bool",
-            "description": "允许 LLM 调用自拍参考照",
-            "hint": "关闭后，即使 LLM 调用 aiimg_generate(mode=selfie_ref) 也会被拒绝。",
-            "default": true
-          },
-          "reference_images": {
-            "type": "file",
-            "description": "参考人像（可多张）",
-            "hint": "建议上传清晰正脸照，可多张做不同角度参考。",
-            "default": [],
-            "file_types": [
-              "jpg",
-              "jpeg",
-              "png",
-              "webp"
-            ]
-          },
-          "use_edit_chain_when_empty": {
-            "type": "bool",
-            "description": "复用改图链路作为自拍兜底",
-            "hint": "开启后：自拍链为空时直接用改图链；自拍链非空时也会在其后补充改图链中未出现的 provider。",
-            "default": true
-          },
-          "default_output": {
-            "type": "string",
-            "description": "默认输出尺寸/分辨率",
-            "hint": "例：4K / 2048x2048。",
-            "default": "4K"
-          },
-          "chain": {
-            "type": "template_list",
-            "description": "自拍服务商链路（可选）",
-            "hint": "填写后按顺序兜底；若上方“复用改图链路作为自拍兜底”开启，会继续尝试改图链里的其余 provider。",
-            "templates": {
-              "provider": {
-                "name": "Provider",
-                "items": {
-                  "provider_id": {
-                    "type": "string",
-                    "description": "服务商 ID",
-                    "default": ""
-                  },
-                  "output": {
-                    "type": "string",
-                    "description": "覆盖输出",
-                    "hint": "留空使用 default_output；例：4K 或 2048x2048。",
-                    "default": ""
-                  }
-                }
-              }
-            }
-          },
-          "gitee_task_types": {
-            "type": "list",
-            "description": "Gitee 异步自拍默认任务类型",
-            "hint": "仅对 providers 中的 gitee_async 类型生效。默认：id/background/style。",
-            "default": [
-              "id",
-              "background",
-              "style"
-            ]
-          },
-          "prompt_prefix": {
-            "type": "text",
-            "description": "自拍提示词前缀",
-            "hint": "留空使用内置默认。",
-            "default": ""
-          }
-        }
-      },
       "video": {
         "description": "视频生成 (Image-to-Video)",
         "type": "object",
@@ -291,6 +211,66 @@
             "default": 300
           }
         }
+      },
+      "selfie_persona_1": {
+        "description": "人格1自拍配置",
+        "type": "object",
+        "items": {
+          "select_persona": {
+            "type": "string",
+            "description": "人格",
+            "default": "default",
+            "_special": "select_persona"
+          },
+          "reference_images": {
+            "type": "file",
+            "description": "参考人像",
+            "hint": "建议上传清晰正脸照，可多张。",
+            "default": [],
+            "file_types": [
+              "jpg",
+              "jpeg",
+              "png",
+              "webp"
+            ]
+          },
+          "provider_ids": {
+            "type": "list",
+            "description": "自拍服务商链路（按顺序兜底）",
+            "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。",
+            "default": []
+          }
+        }
+      },
+      "selfie_persona_2": {
+        "description": "人格2自拍配置",
+        "type": "object",
+        "items": {
+          "select_persona": {
+            "type": "string",
+            "description": "人格",
+            "default": "default",
+            "_special": "select_persona"
+          },
+          "reference_images": {
+            "type": "file",
+            "description": "参考人像",
+            "hint": "建议上传清晰正脸照，可多张。",
+            "default": [],
+            "file_types": [
+              "jpg",
+              "jpeg",
+              "png",
+              "webp"
+            ]
+          },
+          "provider_ids": {
+            "type": "list",
+            "description": "自拍服务商链路（按顺序兜底）",
+            "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。",
+            "default": []
+          }
+        }
       }
     }
   },
@@ -301,7 +281,7 @@
       "image_context_mode": {
         "type": "string",
         "description": "图片生成后返回给 LLM 上下文的方式",
-        "hint": "image=返回压缩图给LLM（LLM可识别图片内容并回复）；text=返回提示词文字描述给LLM；none=不返回任何内容给LLM。默认 image。",
+        "hint": "可选值：image（返回压缩图，LLM可识别图片内容并回复）/ text（返回提示词文字描述）/ none（不返回）。默认 image。",
         "default": "image"
       }
     }
