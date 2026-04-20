@@ -74,7 +74,8 @@ class GiteeAIImagePlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        self.data_dir = StarTools.get_data_dir("astrbot_plugin_gitee_aiimg")
+        self.data_dir = StarTools.get_data_dir("astrbot_plugin_aiimg")
+        self._legacy_data_dir = StarTools.get_data_dir("astrbot_plugin_gitee_aiimg")
         self._last_image_by_user: dict[str, Path] = {}
 
     async def _call_native_poke(self, event: AstrMessageEvent, target_id: str) -> bool:
@@ -129,6 +130,7 @@ class GiteeAIImagePlugin(Star):
         )
         self.nb = NanoBananaService(self.config, self.imgr)
         self.refs = ReferenceStore(self.data_dir)
+        self._migrate_legacy_data()
         self.videomgr = VideoManager(self.config, self.data_dir)
 
         self._concurrency_lock = asyncio.Lock()
@@ -148,6 +150,36 @@ class GiteeAIImagePlugin(Star):
             f"视频启用={bool(self._get_feature('video').get('enabled', False))}, "
             f"视频预设={len(self._get_video_presets())}个"
         )
+
+    def _migrate_legacy_data(self):
+        import shutil as _shutil
+        legacy = self._legacy_data_dir
+        current = self.data_dir
+        if not legacy.exists():
+            return
+        if legacy.resolve() == current.resolve():
+            return
+        migrated = False
+        legacy_refs = legacy / "refs"
+        current_refs = current / "refs"
+        if legacy_refs.exists() and not current_refs.exists():
+            try:
+                _shutil.copytree(str(legacy_refs), str(current_refs))
+                logger.info("[aiimg] 已迁移旧参考照数据: %s -> %s", legacy_refs, current_refs)
+                migrated = True
+            except Exception as e:
+                logger.warning("[aiimg] 迁移旧参考照数据失败: %s", e)
+        legacy_images = legacy / "images"
+        current_images = current / "images"
+        if legacy_images.exists() and not current_images.exists():
+            try:
+                _shutil.copytree(str(legacy_images), str(current_images))
+                logger.info("[aiimg] 已迁移旧图片数据: %s -> %s", legacy_images, current_images)
+                migrated = True
+            except Exception as e:
+                logger.warning("[aiimg] 迁移旧图片数据失败: %s", e)
+        if migrated:
+            self.refs = ReferenceStore(self.data_dir)
 
     def _remember_last_image(self, event: AstrMessageEvent, image_path: Path) -> None:
         try:
@@ -2195,7 +2227,6 @@ class GiteeAIImagePlugin(Star):
         return base
 
     def _resolve_data_rel_path(self, rel_path: str) -> Path | None:
-        """将 data_dir 下的相对路径解析为绝对路径，并阻止路径穿越。"""
         if not isinstance(rel_path, str) or not rel_path.strip():
             return None
         rel = rel_path.replace("\\", "/").lstrip("/")
@@ -2208,6 +2239,16 @@ class GiteeAIImagePlugin(Star):
             target.relative_to(base)
         except ValueError:
             return None
+        if target.is_file():
+            return target
+        legacy_base = Path(self._legacy_data_dir).resolve(strict=False)
+        legacy_target = (legacy_base / "/".join(parts)).resolve(strict=False)
+        try:
+            legacy_target.relative_to(legacy_base)
+        except ValueError:
+            return target
+        if legacy_target.is_file():
+            return legacy_target
         return target
 
     def _get_persona_config_selfie_reference_paths(
