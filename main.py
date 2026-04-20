@@ -74,7 +74,7 @@ class GiteeAIImagePlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        self.data_dir = StarTools.get_data_dir("astrbot_plugin_gitee_aiimg")
+        self.data_dir = StarTools.get_data_dir("astrbot_plugin_aiimg")
         self._last_image_by_user: dict[str, Path] = {}
 
     async def _call_native_poke(self, event: AstrMessageEvent, target_id: str) -> bool:
@@ -314,9 +314,7 @@ class GiteeAIImagePlugin(Star):
 
         try:
             with PILImage.open(image_path) as im:
-                if im.mode not in {"RGB", "L"}:
-                    im = im.convert("RGB")
-                elif im.mode == "L":
+                if im.mode != "RGB":
                     im = im.convert("RGB")
 
                 w, h = im.size
@@ -367,10 +365,7 @@ class GiteeAIImagePlugin(Star):
 
         try:
             with PILImage.open(image_path) as im:
-                # 转换为RGB（去除alpha通道）
-                if im.mode not in {"RGB", "L"}:
-                    im = im.convert("RGB")
-                elif im.mode == "L":
+                if im.mode != "RGB":
                     im = im.convert("RGB")
 
                 w, h = im.size
@@ -442,7 +437,7 @@ class GiteeAIImagePlugin(Star):
         preset_handler.__doc__ = f"预设改图: {preset_name} [额外提示词]"
 
         self.context.register_commands(
-            star_name="astrbot_plugin_gitee_aiimg",
+            star_name="astrbot_plugin_aiimg",
             command_name=preset_name,
             desc=f"预设改图: {preset_name}",
             priority=5,
@@ -902,10 +897,15 @@ class GiteeAIImagePlugin(Star):
         if self._is_direct_command_message(event, ("自拍参考",)):
             return
         arg = self._extract_command_arg_anywhere(msg, "自拍参考")
-        action, _, _rest = (arg or "").strip().partition(" ")
+        action, _, rest = (arg or "").strip().partition(" ")
         action = action.strip().lower()
+        rest = rest.strip()
+
+        use_global = rest.lower() in {"全局", "global", "default"}
+        persona_name = None if use_global else await self._get_current_persona_name(event)
 
         if not action or action in {"帮助", "help", "h"}:
+            persona_hint = f"\n当前人格：{persona_name}" if persona_name else "\n当前无人格绑定"
             yield event.plain_result(
                 "📸 自拍参考照\n"
                 "━━━━━━━━━━━━━━\n"
@@ -913,25 +913,31 @@ class GiteeAIImagePlugin(Star):
                 "查看：/自拍参考 查看\n"
                 "删除：/自拍参考 删除\n"
                 "━━━━━━━━━━━━━━\n"
+                "加「全局」操作全局参考照：\n"
+                "/自拍参考 设置 全局\n"
+                "/自拍参考 查看 全局\n"
+                "/自拍参考 删除 全局\n"
+                "━━━━━━━━━━━━━━\n"
                 "生成自拍：/自拍 <提示词>\n"
                 "可附带额外参考图（衣服/姿势/场景）"
+                f"{persona_hint}"
             )
             event.stop_event()
             return
 
         if action in {"设置", "set"}:
-            await self._set_selfie_reference(event)
+            await self._set_selfie_reference(event, persona_name=persona_name)
             event.stop_event()
             return
 
         if action in {"查看", "show", "看"}:
-            async for r in self._show_selfie_reference(event):
+            async for r in self._show_selfie_reference(event, persona_name=persona_name):
                 yield r
             event.stop_event()
             return
 
         if action in {"删除", "del", "delete"}:
-            await self._delete_selfie_reference(event)
+            await self._delete_selfie_reference(event, persona_name=persona_name)
             event.stop_event()
             return
 
@@ -1461,6 +1467,171 @@ class GiteeAIImagePlugin(Star):
         feats = feats if isinstance(feats, dict) else {}
         conf = feats.get(name, {})
         return conf if isinstance(conf, dict) else {}
+
+    def _is_selfie_enabled(self) -> bool:
+        conf = self._get_feature("selfie")
+        return self._as_bool(conf.get("enabled", True), default=True)
+
+    def _is_selfie_llm_enabled(self) -> bool:
+        conf = self._get_feature("selfie")
+        return self._as_bool(conf.get("llm_tool_enabled", True), default=True)
+
+    @staticmethod
+    def _selfie_disabled_message() -> str:
+        return "自拍参考图模式已关闭（features.selfie.enabled=false）"
+
+    async def _send_image_with_fallback(
+        self, event: AstrMessageEvent, image_path: Path, *, max_attempts: int = 5
+    ) -> SendImageResult:
+        p = Path(image_path)
+
+        if not p.exists():
+            logger.warning("[send_image] file not found: %s", p)
+            return SendImageResult(ok=False, reason="file_not_found", cached_path=p)
+
+        try:
+            size_bytes = int(p.stat().st_size)
+        except Exception:
+            size_bytes = 0
+
+        file_send_tries = 0
+
+        async def try_send_as_file(trigger: str) -> bool:
+            nonlocal file_send_tries
+            if file_send_tries >= 2:
+                return False
+            file_send_tries += 1
+            try:
+                await event.send(event.chain_result([File(name=p.name, file=str(p))]))
+                logger.info(
+                    "[send_image][file-fallback-v2] file send success: %s (%s bytes), trigger=%s, try=%s",
+                    p.name, size_bytes, trigger, file_send_tries,
+                )
+                return True
+            except Exception as e:
+                logger.warning(
+                    "[send_image][file-fallback-v2] file send failed: trigger=%s, try=%s, err=%s",
+                    trigger, file_send_tries, e,
+                )
+                return False
+
+        if size_bytes > self.IMAGE_AS_FILE_THRESHOLD_BYTES:
+            if await try_send_as_file("size_threshold"):
+                return SendImageResult(ok=True, cached_path=p, used_fallback=True)
+
+        delay = 1.5
+        last_exc: Exception | None = None
+        attempts = max(1, int(max_attempts))
+        rich_media_failures = 0
+        compact_bytes: bytes | None = None
+        compact_prepared = False
+        for attempt in range(1, attempts + 1):
+            fs_exc: Exception | None = None
+            bytes_exc: Exception | None = None
+            compact_exc: Exception | None = None
+            fs_failed_by_rich_media = False
+
+            try:
+                await event.send(event.chain_result([Image.fromFileSystem(str(p))]))
+                return SendImageResult(ok=True, cached_path=p, used_fallback=False)
+            except Exception as e:
+                fs_exc = e
+                last_exc = e
+                if self._is_rich_media_transfer_failed(e):
+                    fs_failed_by_rich_media = True
+                logger.debug(
+                    "[send_image] fromFileSystem failed (attempt=%s/%s): %s",
+                    attempt, attempts, e,
+                )
+
+            try:
+                data = await asyncio.to_thread(p.read_bytes)
+                await event.send(event.chain_result([Image.fromBytes(data)]))
+                if fs_exc is not None:
+                    logger.info(
+                        "[send_image] fromBytes fallback succeeded (attempt=%s/%s).",
+                        attempt, attempts,
+                    )
+                return SendImageResult(ok=True, cached_path=p, used_fallback=True)
+            except Exception as e:
+                bytes_exc = e
+                last_exc = e
+                logger.debug(
+                    "[send_image] fromBytes failed (attempt=%s/%s): %s",
+                    attempt, attempts, e,
+                )
+
+            if self._is_rich_media_transfer_failed(
+                fs_exc
+            ) or self._is_rich_media_transfer_failed(bytes_exc):
+                if await try_send_as_file("rich_media_transfer_failed"):
+                    return SendImageResult(ok=True, cached_path=p, used_fallback=True)
+
+            if self._is_rich_media_transfer_failed(
+                fs_exc
+            ) or self._is_rich_media_transfer_failed(bytes_exc):
+                if not compact_prepared:
+                    compact_prepared = True
+                    compact_bytes = await asyncio.to_thread(
+                        self._build_compact_image_bytes, p
+                    )
+                    if compact_bytes:
+                        logger.info(
+                            "[send_image] prepared compact fallback image: %s -> %s bytes",
+                            p, len(compact_bytes),
+                        )
+                if compact_bytes:
+                    try:
+                        await event.send(
+                            event.chain_result([Image.fromBytes(compact_bytes)])
+                        )
+                        logger.info(
+                            "[send_image] compact fromBytes fallback succeeded (attempt=%s/%s).",
+                            attempt, attempts,
+                        )
+                        return SendImageResult(
+                            ok=True, cached_path=p, used_fallback=True
+                        )
+                    except Exception as e:
+                        compact_exc = e
+                        last_exc = e
+                        logger.debug(
+                            "[send_image] compact fromBytes failed (attempt=%s/%s): %s",
+                            attempt, attempts, e,
+                        )
+
+            attempt_has_rich_media = (
+                self._is_rich_media_transfer_failed(fs_exc)
+                or self._is_rich_media_transfer_failed(bytes_exc)
+                or self._is_rich_media_transfer_failed(compact_exc)
+            )
+            if attempt_has_rich_media:
+                rich_media_failures += 1
+
+            if rich_media_failures >= 2:
+                logger.info(
+                    "[send_image] detected repeated rich media transfer failures, stop retrying early."
+                )
+                break
+
+            if attempt < attempts:
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.8, 8.0)
+
+        reason = (
+            "rich_media_transfer_failed"
+            if self._is_rich_media_transfer_failed(last_exc)
+            else "send_failed"
+        )
+        logger.error(
+            "[send_image] failed after retries: reason=%s, err=%s", reason, last_exc
+        )
+        return SendImageResult(
+            ok=False,
+            reason=reason,
+            cached_path=p,
+            last_error=str(last_exc or ""),
+        )
 
     def _get_draw_ratio_default_sizes(self) -> dict[str, str]:
         conf = self._get_feature("draw")
