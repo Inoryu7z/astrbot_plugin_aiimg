@@ -234,11 +234,29 @@
               "webp"
             ]
           },
+          "default_output": {
+            "type": "string",
+            "description": "默认输出尺寸/分辨率",
+            "hint": "例：4K / 2048x2048。留空则由服务商默认决定。",
+            "default": "4K"
+          },
           "provider_ids": {
             "type": "list",
             "description": "自拍服务商链路（按顺序兜底）",
             "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。",
             "default": []
+          },
+          "output_override": {
+            "type": "string",
+            "description": "覆盖输出",
+            "hint": "留空使用 default_output；例：4K 或 2048x2048。",
+            "default": ""
+          },
+          "prompt_prefix": {
+            "type": "text",
+            "description": "自拍提示词前缀",
+            "hint": "留空使用内置默认。会在最终提示词前自动添加。",
+            "default": ""
           }
         }
       },
@@ -264,11 +282,29 @@
               "webp"
             ]
           },
+          "default_output": {
+            "type": "string",
+            "description": "默认输出尺寸/分辨率",
+            "hint": "例：4K / 2048x2048。留空则由服务商默认决定。",
+            "default": "4K"
+          },
           "provider_ids": {
             "type": "list",
             "description": "自拍服务商链路（按顺序兜底）",
             "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。",
             "default": []
+          },
+          "output_override": {
+            "type": "string",
+            "description": "覆盖输出",
+            "hint": "留空使用 default_output；例：4K 或 2048x2048。",
+            "default": ""
+          },
+          "prompt_prefix": {
+            "type": "text",
+            "description": "自拍提示词前缀",
+            "hint": "留空使用内置默认。会在最终提示词前自动添加。",
+            "default": ""
           }
         }
       }
