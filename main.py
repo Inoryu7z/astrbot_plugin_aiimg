@@ -74,7 +74,7 @@ class GiteeAIImagePlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        self.data_dir = StarTools.get_data_dir("astrbot_plugin_aiimg")
+        self.data_dir = StarTools.get_data_dir("astrbot_plugin_gitee_aiimg")
         self._last_image_by_user: dict[str, Path] = {}
 
     async def _call_native_poke(self, event: AstrMessageEvent, target_id: str) -> bool:
@@ -625,7 +625,8 @@ class GiteeAIImagePlugin(Star):
             pass
         await self.imgr.close()
         await self.draw.close()
-        await self.edit.close()
+        if hasattr(self.edit, 'registry'):
+            self.edit.registry = None
         await self.nb.close()
         await close_session()  # 关闭 utils.py 的 HTTP 会话
 
