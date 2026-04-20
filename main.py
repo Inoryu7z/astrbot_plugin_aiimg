@@ -76,7 +76,11 @@ class GiteeAIImagePlugin(Star):
         self.config = config
         self.data_dir = StarTools.get_data_dir("astrbot_plugin_aiimg")
         self._legacy_data_dir = StarTools.get_data_dir("astrbot_plugin_gitee_aiimg")
-        self._last_image_by_user: dict[str, Path] = {}
+        # 单用户场景，无需清理；每用户仅保留最近一条记录。
+        self._last_image_by_user: dict[str, dict] = {}
+        # 缓存 wardrobe preview 结果，避免 _generate_selfie_image 重复调用 wardrobe。
+        # 格式：{user_id: {"image_path": str, "description": str, "persona": str, "image_id": str}}
+        self._wardrobe_preview_cache: dict[str, dict] = {}
 
     async def _call_native_poke(self, event: AstrMessageEvent, target_id: str) -> bool:
         bot = getattr(event, "bot", None)
@@ -181,14 +185,14 @@ class GiteeAIImagePlugin(Star):
         if migrated:
             self.refs = ReferenceStore(self.data_dir)
 
-    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path) -> None:
+    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path, mode: str = "") -> None:
         try:
             user_id = str(event.get_sender_id() or "")
         except Exception:
             user_id = ""
         if not user_id:
             return
-        self._last_image_by_user[user_id] = Path(image_path)
+        self._last_image_by_user[user_id] = {"path": Path(image_path), "mode": mode}
 
     @staticmethod
     def _as_int(value: Any, *, default: int) -> int:
@@ -754,11 +758,12 @@ class GiteeAIImagePlugin(Star):
     async def resend_last_image(self, event: AstrMessageEvent):
         """重发最近一次生成/改图的图片（不重新生成，不消耗次数）。"""
         user_id = str(event.get_sender_id() or "")
-        p = self._last_image_by_user.get(user_id)
-        if not p:
+        entry = self._last_image_by_user.get(user_id)
+        if not entry:
             await mark_failed(event)
             return
-        if not Path(p).exists():
+        p = entry.get("path") if isinstance(entry, dict) else entry
+        if not p or not Path(p).exists():
             await mark_failed(event)
             return
         ok = await self._send_image_with_fallback(event, p)
@@ -1326,7 +1331,7 @@ class GiteeAIImagePlugin(Star):
                     size=size,
                     resolution=resolution,
                 )
-                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
+                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode="selfie")
 
             # 自动模式：优先识别"自拍"语义 + 已配置参考照
             if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
@@ -1354,7 +1359,7 @@ class GiteeAIImagePlugin(Star):
                             e,
                         )
                     else:
-                        return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
+                        return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode="selfie")
 
             # 改图：用户消息中有图片（不含头像兜底）或显式指定
             has_msg_images = await self._has_message_images(event)
@@ -1491,6 +1496,69 @@ class GiteeAIImagePlugin(Star):
         task.add_done_callback(lambda t: self._video_tasks.discard(t))
 
         return None
+
+    @filter.llm_tool(name="aiimg_wardrobe_preview")
+    async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
+        """在自拍前预览衣橱参考图。返回参考图的文字描述，供你构建更精确的自拍提示词。
+        使用流程：先调用本工具获取描述 → 根据描述构建提示词 → 再调用 aiimg_generate(mode=selfie_ref)。
+        仅当 features.selfie.wardrobe_ref_enabled 开启时可用。
+
+        Args:
+            query(string): 搜索关键词，如"洛丽塔""泳装""日常"，用于从衣橱中检索最匹配的参考图
+        """
+        selfie_conf = self._get_feature("selfie")
+        if not selfie_conf.get("wardrobe_ref_enabled", False):
+            return self._build_llm_tool_text_desc_result(
+                "衣橱参考图功能未开启（features.selfie.wardrobe_ref_enabled=false）"
+            )
+
+        if not self._is_selfie_enabled() or not self._is_selfie_llm_enabled():
+            return self._build_llm_tool_text_desc_result(
+                "自拍功能已关闭"
+            )
+
+        wardrobe = self._get_wardrobe_instance()
+        if not wardrobe:
+            return self._build_llm_tool_text_desc_result(
+                "衣橱插件未安装或未启用，无法获取参考图"
+            )
+
+        persona_name = await self._get_current_persona_name(event)
+        if not persona_name:
+            return self._build_llm_tool_text_desc_result(
+                "当前对话未绑定人格，无法使用衣橱参考图"
+            )
+
+        search_query = (query or "").strip() or "日常自拍照"
+        try:
+            ref = await wardrobe.get_reference_image(
+                query=search_query,
+                current_persona=persona_name,
+            )
+        except Exception as e:
+            logger.warning("[wardrobe_preview] 衣橱参考图获取失败: %s", e)
+            return self._build_llm_tool_text_desc_result(
+                f"衣橱参考图获取失败: {e}"
+            )
+
+        if not ref:
+            return self._build_llm_tool_text_desc_result(
+                "衣橱中未找到匹配的参考图。你可以直接调用 aiimg_generate(mode=selfie_ref) 使用人设参考图自拍。"
+            )
+
+        user_id = str(event.get_sender_id() or "")
+        if user_id:
+            self._wardrobe_preview_cache[user_id] = ref
+
+        description = ref.get("description", "") or ""
+        ref_persona = ref.get("persona", "") or "未知"
+        result_text = (
+            f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
+            f"{description}\n\n"
+            f"请根据以上描述构建自拍提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
+            f"该参考图会自动作为额外参考图传入，你无需在提示词中指定图片序号。"
+        )
+        return self._build_llm_tool_text_desc_result(result_text)
 
     # ==================== 内部方法 ====================
 
@@ -2121,6 +2189,17 @@ class GiteeAIImagePlugin(Star):
             logger.debug("[aiimg] 获取衣橱插件实例失败: %s", e)
         return None
 
+    async def _trigger_wardrobe_auto_save(self, event: AstrMessageEvent) -> None:
+        # 命令路径使用 event.send() 发送图片，不会触发 Pipeline 的 RespondStage，
+        # 因此 wardrobe 的 on_after_message_sent 钩子不会被调用。
+        # 这里主动调用 wardrobe 的自动存图方法来弥补。
+        wardrobe = self._get_wardrobe_instance()
+        if wardrobe and hasattr(wardrobe, "_auto_save_aiimg_image"):
+            try:
+                await wardrobe._auto_save_aiimg_image(event, tool=None)
+            except Exception as e:
+                logger.debug("[aiimg] 触发衣橱自动存图失败: %s", e)
+
     @staticmethod
     def _extract_persona_name(persona_obj) -> str | None:
         if not persona_obj:
@@ -2190,8 +2269,9 @@ class GiteeAIImagePlugin(Star):
             image_path: Path,
             *,
             prompt: str = "",
+            mode: str = "",
     ) -> mcp.types.CallToolResult | None:
-        self._remember_last_image(event, image_path)
+        self._remember_last_image(event, image_path, mode=mode)
 
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
@@ -2463,22 +2543,33 @@ class GiteeAIImagePlugin(Star):
         if selfie_conf.get("wardrobe_ref_enabled", False):
             wardrobe = self._get_wardrobe_instance()
             if wardrobe:
-                query = (prompt or "").strip() or "日常自拍照"
-                try:
-                    ref = await wardrobe.get_reference_image(
-                        query=query,
-                        current_persona=persona_name,
+                # 优先使用 aiimg_wardrobe_preview 缓存的结果，避免重复调用 wardrobe
+                user_id = str(event.get_sender_id() or "")
+                cached = self._wardrobe_preview_cache.pop(user_id, None)
+                if cached:
+                    ref = cached
+                    logger.info(
+                        "[selfie] 使用 wardrobe_preview 缓存: image_id=%s",
+                        ref.get("image_id", "未知"),
                     )
-                    if ref:
-                        ref_paths.append(Path(ref["image_path"]))
-                        wardrobe_ref_added = True
-                        logger.info(
-                            "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
-                            ref.get("persona", "未知"),
-                            ref.get("image_id", "未知"),
+                else:
+                    query = (prompt or "").strip() or "日常自拍照"
+                    try:
+                        ref = await wardrobe.get_reference_image(
+                            query=query,
+                            current_persona=persona_name,
                         )
-                except Exception as e:
-                    logger.warning("[selfie] 衣橱参考图获取失败，跳过: %s", e)
+                    except Exception as e:
+                        logger.warning("[selfie] 衣橱参考图获取失败，跳过: %s", e)
+                        ref = None
+                if ref:
+                    ref_paths.append(Path(ref["image_path"]))
+                    wardrobe_ref_added = True
+                    logger.info(
+                        "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
+                        ref.get("persona", "未知"),
+                        ref.get("image_id", "未知"),
+                    )
 
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
@@ -2555,7 +2646,8 @@ class GiteeAIImagePlugin(Star):
         try:
             await mark_processing(event)
             image_path = await self._generate_selfie_image(event, prompt, backend)
-            self._remember_last_image(event, image_path)
+            self._remember_last_image(event, image_path, mode="selfie")
+            await self._trigger_wardrobe_auto_save(event)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
@@ -2621,6 +2713,9 @@ class GiteeAIImagePlugin(Star):
     async def _delete_selfie_reference(
             self, event: AstrMessageEvent, persona_name: str | None = None
     ):
+        # 注意：此方法仅删除通过 /自拍参考 设置 命令保存的参考照（ReferenceStore）。
+        # WebUI 中 selfie_persona_1/2 配置的参考照不受影响，仍会继续生效。
+        # 这是设计意图：WebUI 配置属于持久化配置，不应通过命令删除。
 
         store_key = self._get_selfie_ref_store_key(event, persona_name=persona_name)
         deleted = await self.refs.delete(store_key)
