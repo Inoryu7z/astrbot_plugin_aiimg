@@ -1458,6 +1458,18 @@ class GiteeAIImagePlugin(Star):
         conf = feats.get(name, {})
         return conf if isinstance(conf, dict) else {}
 
+    def _is_selfie_enabled(self) -> bool:
+        """检查自拍功能是否启用（通过检查是否配置了任何人格的自拍）"""
+        for idx in [1, 2]:
+            conf = self._get_selfie_persona_config(idx)
+            if conf and conf.get("select_persona"):
+                return True
+        return False
+
+    @staticmethod
+    def _selfie_disabled_message() -> str:
+        return "自拍参考图模式已关闭（未配置任何人格的自拍）"
+
     def _get_draw_ratio_default_sizes(self) -> dict[str, str]:
         conf = self._get_feature("draw")
         raw = conf.get("ratio_default_sizes", {})
@@ -2152,10 +2164,8 @@ class GiteeAIImagePlugin(Star):
             provider_ids = conf.get("provider_ids", [])
             if not isinstance(provider_ids, list):
                 continue
-            # 获取覆盖输出设置（用于链路中每个 provider 的 output）
-            output_override = str(conf.get("output_override", "") or "").strip()
             chain_items = [
-                {"provider_id": str(pid).strip(), "output": output_override}
+                {"provider_id": str(pid).strip()}
                 for pid in provider_ids
                 if str(pid).strip()
             ]
