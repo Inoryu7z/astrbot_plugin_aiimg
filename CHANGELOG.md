@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.1.1
+
+**🐛 Bug 修复**
+
+* 修复衣橱 `get_reference_image` 调用无异常保护的问题：衣橱插件异常时不再导致自拍整体失败，改为跳过并继续正常生图。
+* 修复配置读取不一致：衣橱参考图配置改用 `_get_feature("selfie")`，与类内其他配置读取方式统一，增加类型安全检查。
+* 修复 `extra_refs` 计数未包含衣橱参考图的问题：prompt 中"额外参考图数量"现在正确反映衣橱参考图。
+* 修复 `core/utils.py` 缺少 `Path` 导入：引用消息中的本地文件路径图片会触发 `NameError`，现已补全导入。
+* 修复 `selfie_regex_fallback` 条件过于宽泛：`"自拍" in msg` 会匹配普通聊天消息（如"教我自拍"），改为只匹配带命令前缀的情况。
+
+**🧹 代码清理**
+
+* 移除 `aiimg_generate` 中 `if self is None` 不可达的死代码。
+* 移除衣橱调用处 `persona_name or ""` 的冗余写法（此处 `persona_name` 必定非空）。
+
+---
+
 ## v1.1.0
 
 **✨ 衣橱参考图接入**
