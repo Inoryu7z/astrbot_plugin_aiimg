@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.1.2
+
+**✨ 新功能**
+
+* 新增 `aiimg_wardrobe_preview` LLM 工具：自拍前先获取衣橱参考图的文字描述，LLM 可据此构建更精确的提示词（两步调用流程）
+* 新增 `_wardrobe_preview_cache` 缓存机制：preview 结果自动传递给后续 `aiimg_generate`，避免重复调用衣橱搜索
+* selfie 配置新增 `enabled` 和 `llm_tool_enabled` 字段，与其他功能（draw/edit/video）保持一致
+
+**🐛 Bug 修复**
+
+* 修复自动存图不区分生成模式的问题：自动存图现在仅保存自拍模式生成的图片，文生图/改图不再自动存入
+* 修复命令路径自动存图不触发的问题：`after_message_sent` 钩子仅在 Pipeline RespondStage 触发，`event.send()` 不会触发；新增 `_trigger_wardrobe_auto_save` 主动调用衣橱存图方法
+* 修复 `_last_image_by_user` 不携带模式信息的问题：类型从 `dict[str, Path]` 改为 `dict[str, dict]`，增加 `mode` 字段
+
+**📝 文档**
+
+* 更新 AIIMG_DEV_GUIDE.md 与当前代码同步
+* 新增 HANDOFF.md 交接文档（本地维护，不上传 GitHub）
+
+---
+
 ## v1.1.1
 
 **🐛 Bug 修复**

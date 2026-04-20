@@ -216,6 +216,17 @@
         "description": "Bot 自拍 (Selfie)",
         "type": "object",
         "items": {
+          "enabled": {
+            "type": "bool",
+            "description": "启用自拍功能",
+            "default": true
+          },
+          "llm_tool_enabled": {
+            "type": "bool",
+            "description": "允许 LLM 调用自拍",
+            "hint": "关闭后，即使 LLM 调用 aiimg_generate(mode=selfie_ref) 也会被拒绝。",
+            "default": true
+          },
           "wardrobe_ref_enabled": {
             "type": "bool",
             "description": "启用衣橱参考图",
