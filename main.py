@@ -1222,6 +1222,10 @@ class GiteeAIImagePlugin(Star):
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
 
+        if self is None:
+            logger.error("[aiimg_generate] 插件实例未绑定(self=None)，可能由热重载异常导致，请重启 AstrBot。")
+            return None
+
         # === TTL 去重检查（防止 ToolLoop 重复调用）===
         message_id = (
                 getattr(getattr(event, "message_obj", None), "message_id", "") or ""
@@ -1457,18 +1461,6 @@ class GiteeAIImagePlugin(Star):
         feats = feats if isinstance(feats, dict) else {}
         conf = feats.get(name, {})
         return conf if isinstance(conf, dict) else {}
-
-    def _is_selfie_enabled(self) -> bool:
-        """检查自拍功能是否启用（通过检查是否配置了任何人格的自拍）"""
-        for idx in [1, 2]:
-            conf = self._get_selfie_persona_config(idx)
-            if conf and conf.get("select_persona"):
-                return True
-        return False
-
-    @staticmethod
-    def _selfie_disabled_message() -> str:
-        return "自拍参考图模式已关闭（未配置任何人格的自拍）"
 
     def _get_draw_ratio_default_sizes(self) -> dict[str, str]:
         conf = self._get_feature("draw")
@@ -1880,23 +1872,57 @@ class GiteeAIImagePlugin(Star):
 
     async def _get_current_persona_name(self, event: AstrMessageEvent) -> str | None:
         try:
-            conv_mgr = getattr(self.context, "conversation_manager", None)
-            if not conv_mgr:
-                return None
             umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
             if not umo:
                 return None
-            curr_cid = await conv_mgr.get_curr_conversation_id(umo)
-            if not curr_cid:
-                return None
-            conversation = await conv_mgr.get_conversation(umo, curr_cid)
-            if not conversation:
-                return None
-            persona_id = getattr(conversation, "persona_id", None)
+
+            persona_id = None
+
+            conv_mgr = getattr(self.context, "conversation_manager", None)
+            if conv_mgr:
+                try:
+                    curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+                    if curr_cid:
+                        conversation = await conv_mgr.get_conversation(umo, curr_cid)
+                        if conversation:
+                            persona_id = getattr(conversation, "persona_id", None)
+                except Exception as e:
+                    logger.debug("[aiimg] 从 conversation_manager 获取 persona_id 失败: %s", e)
+
             if persona_id:
                 return str(persona_id).strip() or None
+
+            persona_mgr = getattr(self.context, "persona_manager", None)
+            if persona_mgr:
+                try:
+                    persona_obj = None
+                    if hasattr(persona_mgr, "get_default_persona_v3"):
+                        persona_obj = await persona_mgr.get_default_persona_v3(umo)
+                    if persona_obj:
+                        name = self._extract_persona_name(persona_obj)
+                        if name:
+                            return name
+                except Exception as e:
+                    logger.debug("[aiimg] 从 persona_manager 获取默认人格失败: %s", e)
         except Exception as e:
             logger.debug("[aiimg] 获取人格名失败: %s", e)
+        return None
+
+    @staticmethod
+    def _extract_persona_name(persona_obj) -> str | None:
+        if not persona_obj:
+            return None
+        if isinstance(persona_obj, dict):
+            for key in ("name", "persona_id", "id"):
+                val = persona_obj.get(key)
+                if val and str(val).strip():
+                    return str(val).strip()
+            return None
+        for attr in ("name", "persona_id", "id"):
+            if hasattr(persona_obj, attr):
+                val = getattr(persona_obj, attr, None)
+                if val and str(val).strip():
+                    return str(val).strip()
         return None
 
     def _get_llm_tool_conf(self) -> dict:
@@ -2164,8 +2190,10 @@ class GiteeAIImagePlugin(Star):
             provider_ids = conf.get("provider_ids", [])
             if not isinstance(provider_ids, list):
                 continue
+            # 获取覆盖输出设置（用于链路中每个 provider 的 output）
+            output_override = str(conf.get("output_override", "") or "").strip()
             chain_items = [
-                {"provider_id": str(pid).strip()}
+                {"provider_id": str(pid).strip(), "output": output_override}
                 for pid in provider_ids
                 if str(pid).strip()
             ]
