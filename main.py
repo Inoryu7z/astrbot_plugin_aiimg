@@ -2246,11 +2246,15 @@ class GiteeAIImagePlugin(Star):
             b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
             return mcp.types.CallToolResult(
                 content=[
+                    mcp.types.TextContent(
+                        type="text",
+                        text="图片已直接发送给用户，无需再次发送。以下为图片内容供你参考。",
+                    ),
                     mcp.types.ImageContent(
                         type="image",
                         data=b64_data,
                         mimeType="image/jpeg",
-                    )
+                    ),
                 ]
             )
         except Exception as e:
