@@ -2255,24 +2255,31 @@ class GiteeAIImagePlugin(Star):
             self, persona_name: str
     ) -> list[Path]:
         """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的参考照"""
+        logger.debug("[selfie_ref] 查找人格配置: persona_name=%r", persona_name)
         for idx in [1, 2]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
+                logger.debug("[selfie_ref] selfie_persona_%s 无配置", idx)
                 continue
             conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            logger.debug("[selfie_ref] selfie_persona_%s: select_persona=%r vs persona_name=%r match=%s", idx, conf_persona, persona_name, conf_persona == persona_name)
             if conf_persona != persona_name:
                 continue
             ref_list = conf.get("reference_images", [])
+            logger.debug("[selfie_ref] selfie_persona_%s: reference_images=%s", idx, ref_list)
             if not isinstance(ref_list, list):
                 continue
             paths: list[Path] = []
             for rel_path in ref_list:
                 p = self._resolve_data_rel_path(str(rel_path))
+                logger.debug("[selfie_ref] 解析路径: rel=%r -> p=%s exists=%s", rel_path, p, p.is_file() if p else None)
                 if not p:
                     continue
                 if p.is_file():
                     paths.append(p)
+            logger.debug("[selfie_ref] 找到 %d 张参考照", len(paths))
             return paths
+        logger.debug("[selfie_ref] 未找到任何匹配的人格配置")
         return []
 
     async def _get_selfie_reference_paths(
