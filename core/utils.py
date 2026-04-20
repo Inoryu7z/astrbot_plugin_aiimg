@@ -5,6 +5,7 @@ Utility helpers for image extraction and downloads.
 import asyncio
 import base64
 import io
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 

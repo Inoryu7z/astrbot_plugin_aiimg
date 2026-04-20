@@ -858,7 +858,10 @@ class GiteeAIImagePlugin(Star):
         if self._is_direct_command_message(event, ("自拍",)):
             return
         prompt = self._extract_command_arg_anywhere(msg, "自拍")
-        if prompt or "/自拍" in msg or "自拍" in msg:
+        has_selfie_cmd = any(
+            msg.startswith(f"{prefix}自拍") for prefix in "/!！.。．"
+        )
+        if prompt or has_selfie_cmd:
             if not self._is_selfie_enabled():
                 await mark_failed(event)
                 event.stop_event()
