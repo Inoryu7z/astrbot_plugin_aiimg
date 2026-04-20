@@ -2122,13 +2122,17 @@ class GiteeAIImagePlugin(Star):
         )
         return True
 
-    def _build_selfie_prompt(self, prompt: str, extra_refs: int) -> str:
-        prefix = (
-            "请根据参考图生成一张新的自拍照：\n"
-            "1) 以第1张参考图的人脸身份为准（仅人脸身份特征），保持五官/气质一致。\n"
-            "2) 如果还有其它参考图，请将它们仅作为服装/姿势/构图/场景的参考。\n"
-            "3) 输出一张高质量照片风格自拍，不要拼图，不要水印。"
-        )
+    def _build_selfie_prompt(self, prompt: str, extra_refs: int, prompt_prefix: str = "") -> str:
+        # 使用配置的提示词前缀，如果未配置则使用默认前缀
+        if prompt_prefix:
+            prefix = prompt_prefix
+        else:
+            prefix = (
+                "请根据参考图生成一张新的自拍照：\n"
+                "1) 以第1张参考图的人脸身份为准（仅人脸身份特征），保持五官/气质一致。\n"
+                "2) 如果还有其它参考图，请将它们仅作为服装/姿势/构图/场景的参考。\n"
+                "3) 输出一张高质量照片风格自拍，不要拼图，不要水印。"
+            )
         user_prompt = (prompt or "").strip() or "日常自拍照"
         if extra_refs > 0:
             return (
@@ -2148,12 +2152,26 @@ class GiteeAIImagePlugin(Star):
             provider_ids = conf.get("provider_ids", [])
             if not isinstance(provider_ids, list):
                 continue
+            # 获取覆盖输出设置（用于链路中每个 provider 的 output）
+            output_override = str(conf.get("output_override", "") or "").strip()
             chain_items = [
-                {"provider_id": str(pid).strip()}
+                {"provider_id": str(pid).strip(), "output": output_override}
                 for pid in provider_ids
                 if str(pid).strip()
             ]
             return chain_items if chain_items else None
+        return None
+
+    def _get_persona_selfie_config(self, persona_name: str) -> dict | None:
+        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的完整配置"""
+        for idx in [1, 2]:
+            conf = self._get_selfie_persona_config(idx)
+            if not conf:
+                continue
+            conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            if conf_persona != persona_name:
+                continue
+            return conf
         return None
 
     async def _generate_selfie_image(
@@ -2184,17 +2202,30 @@ class GiteeAIImagePlugin(Star):
                 f"人格「{persona_name}」未配置自拍服务商链路。请在 WebUI 的 features.selfie_personas 中为该人格添加 chain。"
             )
 
+        # 获取人格自拍配置
+        persona_conf = self._get_persona_selfie_config(persona_name)
+        
+        # 获取默认输出尺寸（如果调用方未指定）
+        if size is None and resolution is None:
+            default_output = str(persona_conf.get("default_output", "") or "").strip() if persona_conf else ""
+            if default_output:
+                size = default_output
+        
+        # 获取并应用提示词前缀
+        prompt_prefix = str(persona_conf.get("prompt_prefix", "") or "").strip() if persona_conf else ""
+        
         extra_segs = await get_images_from_event(event, include_avatar=False)
         extra_bytes = await self._image_segs_to_bytes(extra_segs)
         images = [*ref_images, *extra_bytes]
 
-        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes))
+        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes), prompt_prefix=prompt_prefix)
 
         logger.debug(
-            "[selfie] persona=%s source=%s providers=%s",
+            "[selfie] persona=%s source=%s providers=%s size=%s",
             persona_name,
             source,
             [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
+            size or resolution or "default",
         )
 
         return await self.edit.edit(
