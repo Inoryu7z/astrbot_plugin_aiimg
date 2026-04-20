@@ -2112,6 +2112,16 @@ class GiteeAIImagePlugin(Star):
             logger.debug("[aiimg] 获取人格名失败: %s", e)
         return None
 
+    def _get_wardrobe_instance(self):
+        """获取衣橱插件实例，用于参考图功能。"""
+        try:
+            star = self.context.get_registered_star("astrbot_plugin_wardrobe")
+            if star and star.activated and star.star_cls:
+                return star.star_cls
+        except Exception as e:
+            logger.debug("[aiimg] 获取衣橱插件实例失败: %s", e)
+        return None
+
     @staticmethod
     def _extract_persona_name(persona_obj) -> str | None:
         if not persona_obj:
@@ -2448,6 +2458,27 @@ class GiteeAIImagePlugin(Star):
         ref_paths, source = await self._get_selfie_reference_paths(
             event, persona_name=persona_name
         )
+
+        # === 衣橱参考图逻辑 ===
+        features = self.config.get("features", {}) if isinstance(self.config, dict) else {}
+        selfie_conf = features.get("selfie", {}) if isinstance(features, dict) else {}
+        if selfie_conf.get("wardrobe_ref_enabled", False):
+            wardrobe = self._get_wardrobe_instance()
+            if wardrobe:
+                query = (prompt or "").strip() or "日常自拍照"
+                ref = await wardrobe.get_reference_image(
+                    query=query,
+                    current_persona=persona_name or "",
+                )
+                if ref:
+                    ref_paths.append(Path(ref["image_path"]))
+                    logger.info(
+                        "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
+                        ref.get("persona", "未知"),
+                        ref.get("image_id", "未知"),
+                    )
+        # === 衣橱参考图逻辑结束 ===
+
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
             raise RuntimeError(

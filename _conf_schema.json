@@ -212,6 +212,18 @@
           }
         }
       },
+      "selfie": {
+        "description": "Bot 自拍 (Selfie)",
+        "type": "object",
+        "items": {
+          "wardrobe_ref_enabled": {
+            "type": "bool",
+            "description": "启用衣橱参考图",
+            "hint": "开启后，自拍时会从衣橱插件获取参考图并追加到人设参考图后面。需要衣橱插件已安装且已配置取图模型。",
+            "default": false
+          }
+        }
+      },
       "selfie_persona_1": {
         "description": "人格1自拍配置",
         "type": "object",
