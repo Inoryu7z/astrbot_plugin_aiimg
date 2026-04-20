@@ -1261,10 +1261,6 @@ class GiteeAIImagePlugin(Star):
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
 
-        if self is None:
-            logger.error("[aiimg_generate] 插件实例未绑定(self=None)，可能由热重载异常导致，请重启 AstrBot。")
-            return None
-
         # === TTL 去重检查（防止 ToolLoop 重复调用）===
         message_id = (
                 getattr(getattr(event, "message_obj", None), "message_id", "") or ""
@@ -2459,25 +2455,27 @@ class GiteeAIImagePlugin(Star):
             event, persona_name=persona_name
         )
 
-        # === 衣橱参考图逻辑 ===
-        features = self.config.get("features", {}) if isinstance(self.config, dict) else {}
-        selfie_conf = features.get("selfie", {}) if isinstance(features, dict) else {}
+        selfie_conf = self._get_feature("selfie")
+        wardrobe_ref_added = False
         if selfie_conf.get("wardrobe_ref_enabled", False):
             wardrobe = self._get_wardrobe_instance()
             if wardrobe:
                 query = (prompt or "").strip() or "日常自拍照"
-                ref = await wardrobe.get_reference_image(
-                    query=query,
-                    current_persona=persona_name or "",
-                )
-                if ref:
-                    ref_paths.append(Path(ref["image_path"]))
-                    logger.info(
-                        "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
-                        ref.get("persona", "未知"),
-                        ref.get("image_id", "未知"),
+                try:
+                    ref = await wardrobe.get_reference_image(
+                        query=query,
+                        current_persona=persona_name,
                     )
-        # === 衣橱参考图逻辑结束 ===
+                    if ref:
+                        ref_paths.append(Path(ref["image_path"]))
+                        wardrobe_ref_added = True
+                        logger.info(
+                            "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
+                            ref.get("persona", "未知"),
+                            ref.get("image_id", "未知"),
+                        )
+                except Exception as e:
+                    logger.warning("[selfie] 衣橱参考图获取失败，跳过: %s", e)
 
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
@@ -2507,7 +2505,7 @@ class GiteeAIImagePlugin(Star):
         extra_bytes = await self._image_segs_to_bytes(extra_segs)
         images = [*ref_images, *extra_bytes]
 
-        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes), prompt_prefix=prompt_prefix)
+        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0), prompt_prefix=prompt_prefix)
 
         logger.debug(
             "[selfie] persona=%s source=%s providers=%s size=%s",
