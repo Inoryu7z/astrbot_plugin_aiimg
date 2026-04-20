@@ -1253,7 +1253,7 @@ class GiteeAIImagePlugin(Star):
             backend: str = "auto",
             output: str = "",
     ):
-        """统一图片生成/改图/自拍（参考照）工具。
+        """统一图片生成/改图/自拍（参考照）工具。生成的图片会自动发送给用户，无需手动调用 send_message_to_user。
 
         使用建议（给 LLM 的决策规则）：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
@@ -1499,12 +1499,14 @@ class GiteeAIImagePlugin(Star):
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
-        """在自拍前预览衣橱参考图。返回参考图的文字描述，供你构建更精确的自拍提示词。
-        使用流程：先调用本工具获取描述 → 根据描述构建提示词 → 再调用 aiimg_generate(mode=selfie_ref)。
+        """【自拍专用】从衣橱中检索一张参考图并返回其文字描述，用于指导自拍提示词的构建。
+        本工具不会发送图片给用户，只返回文字描述供你参考。
+        不要与 search_wardrobe_image 混淆：search_wardrobe_image 是直接发送图片给用户查看，而本工具是自拍流程的预处理步骤。
+        使用流程：先调用本工具获取描述 → 根据描述构建提示词 → 再调用 aiimg_generate(mode=selfie_ref) 生图。
         仅当 features.selfie.wardrobe_ref_enabled 开启时可用。
 
         Args:
-            query(string): 搜索关键词，如"洛丽塔""泳装""日常"，用于从衣橱中检索最匹配的参考图
+            query(string): 搜索关键词，如"洛丽塔""泳装""cosplay"，用于从衣橱中检索最匹配的参考图
         """
         selfie_conf = self._get_feature("selfie")
         if not selfie_conf.get("wardrobe_ref_enabled", False):

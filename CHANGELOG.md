@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.3
+
+**🔧 优化**
+
+* 细化 `aiimg_wardrobe_preview` 工具描述：标注【自拍专用】，明确与 `search_wardrobe_image` 的区别（不发图，只返回描述）
+* `aiimg_generate` 工具描述补充：生成的图片会自动发送给用户，无需手动调用 send_message_to_user
+
+---
+
 ## v1.1.2
 
 **✨ 新功能**
@@ -17,7 +26,6 @@
 **📝 文档**
 
 * 更新 AIIMG_DEV_GUIDE.md 与当前代码同步
-* 新增 HANDOFF.md 交接文档（本地维护，不上传 GitHub）
 
 ---
 
