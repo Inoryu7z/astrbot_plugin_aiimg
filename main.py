@@ -144,7 +144,8 @@ class GiteeAIImagePlugin(Star):
 
         self._patch_tool_image_cache_runtime()
 
-        # 动态注册预设命令 (方案C: /手办化 直接触发)
+        self._unregister_disabled_tools()
+
         self._register_preset_commands()
 
         logger.info(
@@ -1259,6 +1260,7 @@ class GiteeAIImagePlugin(Star):
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
         - 用户要求"bot 自拍/来一张你自己的自拍"，且已设置自拍参考照：用 mode=selfie_ref（或 mode=auto）
         - 纯文生图（用户没有给图片）：用 mode=text（或 mode=auto）
+        - 用户提到"以前拍的""存过的""衣柜里的"：不要调用本工具，应使用 search_wardrobe_image 发送已有图片
 
         Args:
             prompt(string): 提示词
@@ -1499,14 +1501,12 @@ class GiteeAIImagePlugin(Star):
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
-        """【自拍专用】从衣橱中检索一张参考图并返回其文字描述，用于指导自拍提示词的构建。
-        本工具不会发送图片给用户，只返回文字描述供你参考。
-        不要与 search_wardrobe_image 混淆：search_wardrobe_image 是直接发送图片给用户查看，而本工具是自拍流程的预处理步骤。
-        使用流程：先调用本工具获取描述 → 根据描述构建提示词 → 再调用 aiimg_generate(mode=selfie_ref) 生图。
-        仅当 features.selfie.wardrobe_ref_enabled 开启时可用。
+        """【aiimg_generate(mode=selfie_ref) 的前置步骤】当用户要求 bot 自拍，且你需要从衣橱获取参考图来构建提示词时，先调用本工具。
+        本工具只返回文字描述，不会发送图片给用户。获取描述后，根据描述构建提示词，再调用 aiimg_generate(mode="selfie_ref") 生图。
+        不要与 search_wardrobe_image 混淆：search_wardrobe_image 是直接发送已有图片给用户查看，而本工具是生图前的参考信息获取。
 
         Args:
-            query(string): 搜索关键词，如"洛丽塔""泳装""cosplay"，用于从衣橱中检索最匹配的参考图
+            query(string): 搜索描述，用自然语言描述想要的视觉风格，如"洛丽塔风格的可爱自拍""泳装海边场景"
         """
         selfie_conf = self._get_feature("selfie")
         if not selfie_conf.get("wardrobe_ref_enabled", False):
@@ -1563,6 +1563,18 @@ class GiteeAIImagePlugin(Star):
         return self._build_llm_tool_text_desc_result(result_text)
 
     # ==================== 内部方法 ====================
+
+    def _unregister_disabled_tools(self):
+        try:
+            from astrbot.core.provider.register import llm_tools as _registry
+        except ImportError:
+            return
+        if _registry is None:
+            return
+        selfie_conf = self._get_feature("selfie")
+        if not selfie_conf.get("wardrobe_ref_enabled", False):
+            _registry.remove_func("aiimg_wardrobe_preview")
+            logger.info("[GiteeAIImagePlugin] 衣橱参考图未开启，已卸载 aiimg_wardrobe_preview 工具")
 
     def _get_feature(self, name: str) -> dict:
         feats = self.config.get("features", {}) if isinstance(self.config, dict) else {}
