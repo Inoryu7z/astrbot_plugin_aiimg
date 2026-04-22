@@ -1,14 +1,60 @@
-# Changelog
+### v1.1.4
 
-All notable changes to this project will be documented in this file.
+**🖼️ OpenAI Full URL 后端多图支持优化**
 
-## [1.1.4] - 2026-04-22
+* 修改 `edit` 方法的默认 `edit_mode` 行为，所有 OpenAI 兼容提供商默认使用 `json_image_array` 模式传递多图。
+* 之前非火山引擎 ARK 的提供商会将多张图片拼接成一张发送，现在统一改为以数组形式传递。
+* 豆包（火山引擎 ARK）行为不受影响，原本就使用 `json_image_array` 模式。
 
-### Changed
-- 🔧 **OpenAI Full URL Backend**: 修改 `edit` 方法的默认行为，所有 OpenAI 兼容提供商默认使用 `json_image_array` 模式传递多图，而非拼接成单张图片
-- 此改动不影响豆包（火山引擎 ARK）的现有实现，豆包原本就使用 `json_image_array` 模式
+---
 
-## [1.1.3] - Previous Release
+### v1.1.3
 
-### Note
-- Version history not documented before 1.1.4
+**📝 LLM 工具描述优化与衣柜预览精简**
+
+* 优化 `aiimg_generate` 工具描述，增加 `wardrobe` 边界说明。
+* `aiimg_wardrobe_preview` 改为前置步骤定位，未开启时动态卸载。
+* 衣柜预览返回指引精简，移除冗余的 `ref_strength` 提示逻辑。
+
+---
+
+### v1.1.2
+
+**🐛 图片上下文模式修复**
+
+* 修复 `image_context_mode=image` 时重复发送图片的问题。
+
+---
+
+### v1.1.1
+
+**🛠️ Bug 修复与代码清理**
+
+* 修复 `utils.py` 缺少 `Path` 导入的问题。
+* 修复 `selfie` 正则误触发问题。
+* 补充数据目录兼容性处理。
+* 添加 `__init__.py`，修复模块导入问题。
+* 清理死代码，优化 registry 重置关闭逻辑。
+
+---
+
+### v1.1.0
+
+**👗 衣柜参考图支持上线**
+
+* 新增 `aiimg_wardrobe_preview` LLM 工具，支持从衣柜中检索最匹配的参考图。
+* 新增 `aiimg_search_wardrobe_image` 内部方法，按关键词搜索衣柜参考图。
+* 衣柜参考图异常保护：搜索失败时优雅降级。
+* 配置读取统一化，`extra_refs` 计数修正。
+* 自拍参考照查找调试日志完善。
+
+---
+
+### v1.0.0
+
+**🚀 插件 Fork 首发版本**
+
+* 基于 `astrbot_plugin_gitee_aiimg` v4.2.18 Fork，重命名为 `astrbot_plugin_aiimg`。
+* 保留原有功能：文生图、图生图/改图、Bot 自拍（参考照）、视频生成。
+* 支持多服务商：Gitee AI、Gemini、Grok、Vertex AI Anonymous、OpenAI 兼容接口等。
+* 支持 LLM 工具调用、指令调用、预设提示词、多 Key 轮询、失败重试与超时配置。
