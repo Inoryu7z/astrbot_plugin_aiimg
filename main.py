@@ -1558,11 +1558,11 @@ class GiteeAIImagePlugin(Star):
 
         strength_hint = ""
         if ref_strength == "full":
-            strength_hint = "\n\n请在提示词中保留描述里的姿势、构图与服装细节。"
+            strength_hint = "\n\n请在提示词中完整保留描述里的全部视觉细节，包括姿势动作、构图与服装，不得省略或替换。"
         elif ref_strength == "reimagine":
             strength_hint = "\n\n请仅提取描述中的服装款式信息，完全重新设计姿势与构图。"
         else:
-            strength_hint = "\n\n请在提示词中大致保留描述里的姿势与构图，做适当微调。"
+            strength_hint = "\n\n保留服装与整体氛围，但必须对姿势或构图做出明确的小变动（如调整角度、改变肢体位置、偏移构图重心等），不能原样照搬。"
 
         result_text = (
             f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
