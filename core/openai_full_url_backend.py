@@ -397,10 +397,7 @@ class OpenAIFullURLBackend:
         local_opts = self._collect_local_options(self.extra_body, extra_body)
         edit_mode = str(local_opts.get("__edit_mode") or "auto").strip().lower()
         if not edit_mode or edit_mode == "auto":
-            if _looks_like_ark_multi_image_generate_endpoint(endpoint):
-                edit_mode = "json_image_array"
-            else:
-                edit_mode = "collage"
+            edit_mode = "json_image_array"
 
         base_payload: dict[str, Any] = {
             "model": final_model,
