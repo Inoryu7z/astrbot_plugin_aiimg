@@ -1239,7 +1239,7 @@ class GiteeAIImagePlugin(Star):
         """
         if not use_message_images:
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("没有可用的图片进行编辑")
         return await self.aiimg_generate(
             event, prompt=prompt, mode="edit", backend=backend
         )
@@ -1287,11 +1287,11 @@ class GiteeAIImagePlugin(Star):
         request_id = self._debounce_key(event, "aiimg", user_id)
         if self.debouncer.hit(request_id):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("请求过于频繁，请稍后再试")
 
         if not await self._begin_user_job(user_id, kind="image"):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("当前有图片正在生成中，请稍后再试")
 
         b_raw = (backend or "auto").strip()
         known_provider_ids = set(self.registry.provider_ids())
@@ -1320,13 +1320,13 @@ class GiteeAIImagePlugin(Star):
                         "[aiimg_generate] selfie blocked: features.selfie.enabled=false"
                     )
                     await self._signal_llm_tool_failure(event)
-                    return None
+                    return self._build_llm_tool_failure_result("自拍功能未启用")
                 if not self._is_selfie_llm_enabled():
                     logger.warning(
                         "[aiimg_generate] selfie blocked: features.selfie.llm_tool_enabled=false"
                     )
                     await self._signal_llm_tool_failure(event)
-                    return None
+                    return self._build_llm_tool_failure_result("自拍功能未启用")
                 image_path = await self._generate_selfie_image(
                     event,
                     prompt,
@@ -1383,10 +1383,10 @@ class GiteeAIImagePlugin(Star):
                 edit_conf = self._get_feature("edit")
                 if not bool(edit_conf.get("enabled", True)):
                     await self._signal_llm_tool_failure(event)
-                    return None
+                    return self._build_llm_tool_failure_result("改图功能未启用")
                 if not bool(edit_conf.get("llm_tool_enabled", True)):
                     await self._signal_llm_tool_failure(event)
-                    return None
+                    return self._build_llm_tool_failure_result("改图功能未启用")
                 image_segs = prefetched_edit_image_segs
                 if image_segs is None:
                     image_segs = await get_images_from_event(
@@ -1397,7 +1397,7 @@ class GiteeAIImagePlugin(Star):
                 bytes_images = await self._image_segs_to_bytes(image_segs)
                 if not bytes_images:
                     await self._signal_llm_tool_failure(event)
-                    return None
+                    return self._build_llm_tool_failure_result("没有找到可编辑的图片")
 
                 image_path = await self.edit.edit(
                     prompt=prompt,
@@ -1412,10 +1412,10 @@ class GiteeAIImagePlugin(Star):
             draw_conf = self._get_feature("draw")
             if not bool(draw_conf.get("enabled", True)):
                 await self._signal_llm_tool_failure(event)
-                return None
+                return self._build_llm_tool_failure_result("文生图功能未启用")
             if not bool(draw_conf.get("llm_tool_enabled", True)):
                 await self._signal_llm_tool_failure(event)
-                return None
+                return self._build_llm_tool_failure_result("文生图功能未启用")
             if not prompt:
                 prompt = "a selfie photo"
 
@@ -1431,7 +1431,7 @@ class GiteeAIImagePlugin(Star):
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result(str(e))
         finally:
             await self._end_user_job(user_id, kind="image")
 
@@ -1445,20 +1445,20 @@ class GiteeAIImagePlugin(Star):
         vconf = self._get_feature("video")
         if not bool(vconf.get("enabled", False)):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("视频生成功能未启用")
         if not bool(vconf.get("llm_tool_enabled", True)):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("视频生成功能未启用")
 
         arg = (prompt or "").strip()
         if not arg:
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("请提供视频提示词")
 
         provider_override, arg = self._parse_provider_override_prefix(arg)
         if not arg:
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("请提供视频提示词")
 
         preset, extra_prompt = self._parse_video_args(arg)
         presets = self._get_video_presets()
@@ -1473,11 +1473,11 @@ class GiteeAIImagePlugin(Star):
 
         if self.debouncer.hit(request_id):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("请求过于频繁，请稍后再试")
 
         if not await self._video_begin(user_id):
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("当前有视频正在生成中，请稍后再试")
 
         try:
             await mark_processing(event)
@@ -1493,7 +1493,7 @@ class GiteeAIImagePlugin(Star):
         except Exception:
             await self._video_end(user_id)
             await self._signal_llm_tool_failure(event)
-            return None
+            return self._build_llm_tool_failure_result("视频生成任务创建失败")
 
         self._video_tasks.add(task)
         task.add_done_callback(lambda t: self._video_tasks.discard(t))
@@ -2272,6 +2272,13 @@ class GiteeAIImagePlugin(Star):
             return None
 
     @staticmethod
+    def _build_llm_tool_failure_result(reason: str = "") -> mcp.types.CallToolResult:
+        text = "图片生成失败" + (f"：{reason}" if reason else "")
+        return mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text=text)]
+        )
+
+    @staticmethod
     def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
         text = f"发送了一张图片" + (f"：{desc}" if desc else "")
@@ -2296,7 +2303,7 @@ class GiteeAIImagePlugin(Star):
                 "[aiimg_generate] 无损原图发送失败，已使用表情标注: reason=%s",
                 sent.reason,
             )
-            return None
+            return self._build_llm_tool_failure_result("图片发送失败")
 
         await mark_success(event)
 
