@@ -2273,7 +2273,7 @@ class GiteeAIImagePlugin(Star):
 
     @staticmethod
     def _build_llm_tool_failure_result(reason: str = "") -> mcp.types.CallToolResult:
-        text = "图片生成失败" + (f"：{reason}" if reason else "")
+        text = "图片生成失败" + (f"：{reason}" if reason else "") + "。请以符合你人设的口吻告知用户此结果，不要直接复述原始错误信息。"
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
