@@ -1253,18 +1253,21 @@ class GiteeAIImagePlugin(Star):
             backend: str = "auto",
             output: str = "",
     ):
-        """统一图片生成/改图/自拍（参考照）工具。生成的图片会自动发送给用户，无需手动调用 send_message_to_user。
+        """统一图片生成/改图/自拍工具。
 
-        使用建议（给 LLM 的决策规则）：
+        生成的图片会自动发送给用户，你绝对禁止手动调用 send_message_to_user 发送图片。
+        调用此工具前，你必须先阅读对应的自拍 skill（如 selfie-reference-router 或 sakuragawa-momoha-selfie-router），了解完整的自拍流程和规范后再调用。
+
+        使用建议：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
-        - 用户要求"bot 自拍/来一张你自己的自拍"，且已设置自拍参考照：用 mode=selfie_ref（或 mode=auto）
+        - 最高频：用户要求"bot 自拍/来一张你自己的自拍"，且已设置自拍参考照：用 mode=selfie_ref（或 mode=auto）
         - 纯文生图（用户没有给图片）：用 mode=text（或 mode=auto）
 
         Args:
-            prompt(string): 提示词
-            mode(string): auto=自动判断, text=文生图, edit=改图, selfie_ref=参考照自拍
-            backend(string): auto=自动选择；也可填 provider_id（你在 WebUI providers 里配置的 id）
-            output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（不同后端支持能力不同，留空用默认）
+            prompt(string): 提示词，必须参考skill构建
+            mode(string): auto=自动判断, text=文生图, edit=改图, selfie_ref=自拍
+            backend(string): auto=自动选择
+            output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
@@ -1558,11 +1561,11 @@ class GiteeAIImagePlugin(Star):
 
         strength_hint = ""
         if ref_strength == "full":
-            strength_hint = "\n\n请在提示词中完整保留描述里的全部视觉细节，包括姿势动作、构图与服装，不得省略或替换。"
+            strength_hint = "\n\n用户认为这张图片的效果很棒，所以，请在提示词中完整保留描述里的全部视觉细节，包括姿势动作、构图与服装，除非用户现在的意图是想要替换部分细节，否则不得省略或替换。"
         elif ref_strength == "reimagine":
-            strength_hint = "\n\n请仅提取描述中的服装款式信息，完全重新设计姿势与构图。"
+            strength_hint = "\n\n用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。请仅提取描述中的服装款式信息，完全重新设计姿势与构图。"
         else:
-            strength_hint = "\n\n保留服装与整体氛围，但必须对姿势或构图做出明确的小变动（如调整角度、改变肢体位置、偏移构图重心等），不能原样照搬。"
+            strength_hint = "\n\n用户认可这张图片的服装风格与整体氛围，但希望姿势或构图有所变化。请在保留服装与整体氛围的基础上，对姿势或构图做出明确的小变动（如调整角度、改变肢体位置、偏移构图重心等），不能原样照搬。"
 
         result_text = (
             f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
