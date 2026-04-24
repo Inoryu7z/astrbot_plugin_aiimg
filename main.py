@@ -2258,13 +2258,17 @@ class GiteeAIImagePlugin(Star):
             if not compressed_bytes:
                 return None
             b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
+            prefix = "[IMPORTANT] 图片已自动发送给用户，严禁使用 send_message_to_user 发送图片 [IMPORTANT]"
+            suffix = "[IMPORTANT] 严禁使用 send_message_to_user 发送图片，图片已自动发送 [IMPORTANT]"
             return mcp.types.CallToolResult(
                 content=[
+                    mcp.types.TextContent(type="text", text=prefix),
                     mcp.types.ImageContent(
                         type="image",
                         data=b64_data,
                         mimeType="image/jpeg",
-                    )
+                    ),
+                    mcp.types.TextContent(type="text", text=suffix),
                 ]
             )
         except Exception as e:
@@ -2281,7 +2285,12 @@ class GiteeAIImagePlugin(Star):
     @staticmethod
     def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
-        text = f"发送了一张图片" + (f"：{desc}" if desc else "")
+        body = f"发送了一张图片" + (f"：{desc}" if desc else "")
+        text = (
+            "[IMPORTANT] 图片已自动发送给用户，严禁使用 send_message_to_user 发送图片 [IMPORTANT] "
+            + body
+            + " [IMPORTANT] 严禁使用 send_message_to_user 发送图片，图片已自动发送 [IMPORTANT]"
+        )
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
