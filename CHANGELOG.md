@@ -1,3 +1,13 @@
+### v1.1.6
+
+**🛡️ Tool Result 增加 send_message_to_user 禁令三明治强调**
+
+* 修改 `_build_llm_tool_text_desc_result`：在 text 模式返回文本首尾加入 `[IMPORTANT]` 标签强调，提醒 LLM 图片已自动发送、严禁使用 `send_message_to_user` 发送图片。
+* 修改 `_build_llm_tool_image_result`：在 image 模式中，`ImageContent` 前后各插入一条 `TextContent`，形成三明治结构强化禁令。
+* 解决 LLM 在工具调用返回后"忘记"工具描述中禁令、违规调用 `send_message_to_user` 重复发送图片的问题。
+
+---
+
 ### v1.1.5
 
 **🐛 LLM 工具调用失败时返回错误信息给对话模型**
