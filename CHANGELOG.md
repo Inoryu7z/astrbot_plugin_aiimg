@@ -1,3 +1,13 @@
+### v1.1.9
+
+**🐛 补画提示词双重包装修复 + 补画衣橱保存 + Debug 模式**
+
+* 修复补画提示词双重包装：`_generate_daily_selfie_image` 不再调用 `_build_selfie_prompt`，直接使用 LLM 第二轮生成的完整提示词
+* 修复补画结果未保存到衣橱：新增 `_save_to_wardrobe` 方法，补画成功后自动保存
+* 新增补画 Debug 模式：`features.selfie.daily_selfie_debug` 配置项，开启后日志输出 LLM 每轮完整请求与返回
+
+---
+
 ### v1.1.8
 
 **🐛 补画功能代码审查修复**
