@@ -244,7 +244,7 @@ class DailySelfieService:
             })
         return personas
 
-    async def run_daily_selfie(self):
+    async def run_daily_selfie(self, umo: str = ""):
         if self._selfie_task and not self._selfie_task.done():
             logger.warning("[DailySelfie] 补画任务正在运行中，跳过本次触发")
             return
@@ -259,9 +259,9 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
             return
 
-        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe))
+        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe, umo))
 
-    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any):
+    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
         total_success = 0
         total_fail = 0
         request_interval = 5
@@ -284,7 +284,7 @@ class DailySelfieService:
                     continue
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, remaining, request_interval
+                    p, wardrobe, style_pool, recent_styles, remaining, request_interval, umo
                 )
                 total_success += s
                 total_fail += f
@@ -344,6 +344,7 @@ class DailySelfieService:
         recent_styles: list[str],
         remaining: int,
         request_interval: int,
+        umo: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
         provider_id = persona["provider_id"]
@@ -439,6 +440,8 @@ class DailySelfieService:
                     await self.counter.increment(provider_id)
                     logger.info("[DailySelfie] 人格 %s 补画成功 (%d/%d)", persona_name, success, remaining)
                     await self._save_to_wardrobe(image_path, persona_name)
+                    if umo:
+                        await self._send_image_to_user(umo, image_path, persona_name)
                 else:
                     fail += 1
                     logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
@@ -473,6 +476,35 @@ class DailySelfieService:
                 logger.info("[DailySelfie] 补画图片已保存到衣橱: %s", image_id)
         except Exception as e:
             logger.debug("[DailySelfie] 补画图片保存到衣橱失败: %s", e)
+
+    async def _send_image_to_user(self, umo: str, image_path: Path, persona_name: str) -> None:
+        try:
+            from astrbot.api.event import MessageChain
+            from astrbot.api.message_components import Image as ImageComponent
+
+            p = Path(image_path)
+            if not p.exists():
+                logger.warning("[DailySelfie] 发送图片失败：文件不存在 %s", p)
+                return
+
+            size_bytes = int(p.stat().st_size)
+            chain = MessageChain()
+
+            if size_bytes > 10 * 1024 * 1024:
+                import aiofiles
+                async with aiofiles.open(p, "rb") as f:
+                    image_bytes = await f.read()
+                chain.chain.append(ImageComponent.fromBytes(image_bytes))
+            else:
+                chain.file_image(str(p))
+
+            ok = await self.plugin.context.send_message(umo, chain)
+            if ok:
+                logger.info("[DailySelfie] 图片已发送给用户: %s (%s)", p.name, persona_name)
+            else:
+                logger.warning("[DailySelfie] 图片发送失败（平台未匹配）: %s", p.name)
+        except Exception as e:
+            logger.warning("[DailySelfie] 图片发送异常: %s", e)
 
     async def _llm_round1(
         self,
