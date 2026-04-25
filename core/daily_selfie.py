@@ -431,6 +431,7 @@ class DailySelfieService:
                     success += 1
                     await self.counter.increment(provider_id)
                     logger.info("[DailySelfie] 人格 %s 补画成功 (%d/%d)", persona_name, success, remaining)
+                    await self._save_to_wardrobe(image_path, persona_name)
                 else:
                     fail += 1
                     logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
@@ -441,6 +442,30 @@ class DailySelfieService:
             await asyncio.sleep(request_interval)
 
         return success, fail
+
+    def _is_debug(self) -> bool:
+        selfie_conf = self.plugin._get_feature("selfie")
+        return bool(selfie_conf.get("daily_selfie_debug", False))
+
+    async def _save_to_wardrobe(self, image_path: Path, persona_name: str) -> None:
+        wardrobe = self.plugin._get_wardrobe_instance()
+        if not wardrobe or not hasattr(wardrobe, "_save_image_from_bytes"):
+            return
+        try:
+            import aiofiles
+            async with aiofiles.open(image_path, "rb") as f:
+                image_bytes = await f.read()
+            if not image_bytes:
+                return
+            image_id, attrs, duplicate = await wardrobe._save_image_from_bytes(
+                image_bytes, persona=persona_name, created_by="daily_selfie",
+            )
+            if duplicate:
+                logger.debug("[DailySelfie] 补画图片已存在于衣橱，跳过: %s", image_id)
+            elif image_id:
+                logger.info("[DailySelfie] 补画图片已保存到衣橱: %s", image_id)
+        except Exception as e:
+            logger.debug("[DailySelfie] 补画图片保存到衣橱失败: %s", e)
 
     async def _llm_round1(
         self,
@@ -461,6 +486,14 @@ class DailySelfieService:
             recent_styles=recent_text,
         )
 
+        if self._is_debug():
+            logger.info(
+                "[DailySelfie][DEBUG][Round1] chat_provider_id=%s\n"
+                "=== system_prompt ===\n%s\n"
+                "=== user_prompt ===\n%s",
+                chat_provider_id, system_prompt, user_prompt,
+            )
+
         try:
             resp = await self.plugin.context.llm_generate(
                 chat_provider_id=chat_provider_id,
@@ -470,6 +503,13 @@ class DailySelfieService:
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
                 return []
+
+            if self._is_debug():
+                logger.info(
+                    "[DailySelfie][DEBUG][Round1] === LLM response ===\n%s",
+                    text,
+                )
+
             return _parse_llm_lines(text, remaining)
         except Exception as e:
             logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
@@ -502,6 +542,14 @@ class DailySelfieService:
             style_summary=style_summary,
         )
 
+        if self._is_debug():
+            logger.info(
+                "[DailySelfie][DEBUG][Round2] batch=%d/%d chat_provider_id=%s\n"
+                "=== system_prompt ===\n%s\n"
+                "=== user_prompt ===\n%s",
+                batch_num, total_batch, chat_provider_id, system_prompt, user_prompt,
+            )
+
         try:
             resp = await self.plugin.context.llm_generate(
                 chat_provider_id=chat_provider_id,
@@ -511,6 +559,13 @@ class DailySelfieService:
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
                 return []
+
+            if self._is_debug():
+                logger.info(
+                    "[DailySelfie][DEBUG][Round2] batch=%d/%d === LLM response ===\n%s",
+                    batch_num, total_batch, text,
+                )
+
             return _parse_llm_lines(text, count)
         except Exception as e:
             logger.error("[DailySelfie] LLM第2轮调用失败: %s", e)

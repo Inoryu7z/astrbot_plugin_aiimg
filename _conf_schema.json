@@ -238,6 +238,12 @@
             "description": "每日自拍补画触发时间",
             "hint": "每天在此时间自动检查并补画未用完的额度。格式：HH:MM，如 23:30。",
             "default": "23:30"
+          },
+          "daily_selfie_debug": {
+            "type": "bool",
+            "description": "补画 Debug 模式",
+            "hint": "开启后，补画时会在日志中输出 LLM 每轮的完整请求与返回，便于排查提示词问题。",
+            "default": false
           }
         }
       },

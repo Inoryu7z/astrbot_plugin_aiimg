@@ -2762,16 +2762,12 @@ class GiteeAIImagePlugin(Star):
             if default_output:
                 size = default_output
 
-        prompt_prefix = str(persona_conf.get("prompt_prefix", "") or "").strip() if persona_conf else ""
-
-        final_prompt = self._build_selfie_prompt(
-            prompt, extra_refs=1 if ref_image_path else 0, prompt_prefix=prompt_prefix
-        )
+        final_prompt = prompt
 
         logger.info(
             "[daily_selfie] persona=%s prompt=%s providers=%s",
             persona_name,
-            final_prompt[:100],
+            final_prompt[:200],
             [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
         )
 
