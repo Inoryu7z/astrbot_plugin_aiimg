@@ -232,6 +232,12 @@
             "description": "启用衣橱参考图",
             "hint": "开启后，自拍时会从衣橱插件获取参考图并追加到人设参考图后面。需要衣橱插件已安装且已配置取图模型。",
             "default": false
+          },
+          "daily_selfie_schedule_time": {
+            "type": "string",
+            "description": "每日自拍补画触发时间",
+            "hint": "每天在此时间自动检查并补画未用完的额度。格式：HH:MM，如 23:30。",
+            "default": "23:30"
           }
         }
       },
@@ -274,6 +280,24 @@
             "description": "自拍提示词前缀",
             "hint": "留空使用内置默认。会在最终提示词前自动添加。",
             "default": ""
+          },
+          "daily_selfie_enabled": {
+            "type": "bool",
+            "description": "启用每日补画",
+            "hint": "开启后，该人格将参与每日自动补画，在额度未用完时自动生成自拍。",
+            "default": false
+          },
+          "daily_selfie_limit": {
+            "type": "int",
+            "description": "每日画图额度上限",
+            "hint": "该提供商每天允许的最大画图次数，超过后不再补画。",
+            "default": 20
+          },
+          "daily_selfie_provider_id": {
+            "type": "string",
+            "description": "补画计数的提供商ID",
+            "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
+            "default": ""
           }
         }
       },
@@ -315,6 +339,24 @@
             "type": "text",
             "description": "自拍提示词前缀",
             "hint": "留空使用内置默认。会在最终提示词前自动添加。",
+            "default": ""
+          },
+          "daily_selfie_enabled": {
+            "type": "bool",
+            "description": "启用每日补画",
+            "hint": "开启后，该人格将参与每日自动补画，在额度未用完时自动生成自拍。",
+            "default": false
+          },
+          "daily_selfie_limit": {
+            "type": "int",
+            "description": "每日画图额度上限",
+            "hint": "该提供商每天允许的最大画图次数，超过后不再补画。",
+            "default": 20
+          },
+          "daily_selfie_provider_id": {
+            "type": "string",
+            "description": "补画计数的提供商ID",
+            "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
             "default": ""
           }
         }

@@ -32,6 +32,7 @@ class EditRouter:
         )
 
         self.presets = self._load_presets()
+        self.on_provider_request = None
 
         logger.info(
             "[EditRouter] Initialized: presets=%s, providers=%s",
@@ -175,6 +176,11 @@ class EditRouter:
                         attempt + 1,
                         max_attempts,
                     )
+                    if self.on_provider_request:
+                        try:
+                            await self.on_provider_request(pid)
+                        except Exception:
+                            pass
                     edit_fn = getattr(backend_obj, "edit", None)
                     if not callable(edit_fn):
                         raise RuntimeError("Provider does not support edit()")

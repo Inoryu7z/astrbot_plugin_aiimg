@@ -27,6 +27,7 @@ class ImageDrawService:
         self.registry = registry or ProviderRegistry(
             self.config, imgr=self.imgr, data_dir=self.data_dir
         )
+        self.on_provider_request = None
 
     def _feature_conf(self) -> dict:
         feats = as_dict(self.config.get("features"))
@@ -92,6 +93,11 @@ class ImageDrawService:
 
             t0 = time.perf_counter()
             try:
+                if self.on_provider_request:
+                    try:
+                        await self.on_provider_request(pid)
+                    except Exception:
+                        pass
                 gen = getattr(backend, "generate", None)
                 if not callable(gen):
                     raise RuntimeError("Provider does not support generate()")
