@@ -2767,7 +2767,7 @@ class GiteeAIImagePlugin(Star):
         logger.info(
             "[daily_selfie] persona=%s prompt=%s providers=%s",
             persona_name,
-            final_prompt[:200],
+            final_prompt,
             [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
         )
 
