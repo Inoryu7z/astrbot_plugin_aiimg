@@ -76,12 +76,14 @@ class DailyQuotaCounter:
 
 
 _SYSTEM_PROMPT_ROUND1 = (
-    "你是一位正在准备今日写真拍摄的虚拟角色。根据提供的信息，选择你今天想要拍摄的服装风格和场景。\n\n"
+    "你是一位正在准备今日写真拍摄的虚拟角色，你的名字是{persona_name}。\n\n"
+    "根据你的人格特征和喜好，选择你今天想要拍摄的服装风格和场景。\n\n"
     "规则：\n"
     "- 你需要选择 {remaining} 种不同的拍摄方案\n"
     "- 每种方案用一句自然语言描述，包含服装风格、场景和姿势（例如：在校园湖边穿着甜系洛丽塔裙优雅地散步）\n"
     "- 描述要具体，便于图库检索\n"
     "- 尽量选择不同风格，避免重复\n"
+    "- 选择应符合你的人格气质和喜好\n"
     "- 如果近期已选择过某些风格，请优先尝试其他风格，但如果你真的很想穿也可以\n\n"
     "可用风格池（仅列出衣橱中实际有图的风格）：\n{style_pool}\n\n"
     "近期已选择的风格（近3天）：\n{recent_styles}\n\n"
@@ -89,7 +91,8 @@ _SYSTEM_PROMPT_ROUND1 = (
 )
 
 _SYSTEM_PROMPT_ROUND2 = (
-    "你是一位虚拟角色，正在为今日写真构建提示词。根据提供的参考图描述，为每张参考图构建一个用于AI绘画的提示词。\n\n"
+    "你是一位虚拟角色，名字是{persona_name}，正在为今日写真构建提示词。\n\n"
+    "根据提供的参考图描述，为每张参考图构建一个用于AI绘画的提示词。\n\n"
     "规则：\n"
     "- 提示词应描述一张高质量的自拍照\n"
     "- 保持你的人格特征和气质\n"
@@ -252,7 +255,7 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s LLM第1轮未返回查询", persona_name)
             return 0, 0
 
-        ref_results = await self._search_reference_images(queries, wardrobe)
+        ref_results = await self._search_reference_images(queries, wardrobe, persona_name)
         if not ref_results:
             logger.warning("[DailySelfie] 人格 %s 未找到参考图", persona_name)
             return 0, 0
@@ -303,6 +306,7 @@ class DailySelfieService:
                 )
                 if image_path:
                     success += 1
+                    await self.counter.increment(provider_id)
                     logger.info("[DailySelfie] 人格 %s 补画成功 (%d/%d)", persona_name, success, remaining)
                 else:
                     fail += 1
@@ -326,6 +330,7 @@ class DailySelfieService:
         recent_text = "、".join(recent_styles) if recent_styles else "无"
 
         system_prompt = _SYSTEM_PROMPT_ROUND1.format(
+            persona_name=persona_name,
             remaining=remaining,
             style_pool=style_pool_text,
             recent_styles=recent_text,
@@ -356,6 +361,7 @@ class DailySelfieService:
         desc_text = "\n".join(f"- {d}" for d in descriptions)
 
         system_prompt = _SYSTEM_PROMPT_ROUND2.format(
+            persona_name=persona_name,
             descriptions=desc_text,
             count=count,
         )
@@ -380,6 +386,7 @@ class DailySelfieService:
         self,
         queries: list[str],
         wardrobe: Any,
+        persona_name: str = "",
     ) -> list[dict]:
         results = []
         used_ids: set[str] = set()
@@ -389,7 +396,7 @@ class DailySelfieService:
                 if hasattr(wardrobe, "get_reference_image"):
                     ref = await wardrobe.get_reference_image(
                         query=query,
-                        current_persona="",
+                        current_persona=persona_name,
                     )
                     if ref:
                         img_id = str(ref.get("image_id", ""))
@@ -406,26 +413,11 @@ class DailySelfieService:
             db = getattr(wardrobe, "db", None)
             if not db:
                 return []
-            import aiosqlite
-            async with aiosqlite.connect(db.db_path) as conn:
-                sql = "SELECT style FROM images WHERE persona = ''"
-                cursor = await conn.execute(sql)
-                rows = await cursor.fetchall()
-            style_counts: dict[str, int] = {}
-            for (style_raw,) in rows:
-                if not style_raw:
-                    continue
-                try:
-                    tags = json.loads(style_raw) if isinstance(style_raw, str) else [style_raw]
-                except (json.JSONDecodeError, TypeError):
-                    tags = [style_raw] if style_raw else []
-                if isinstance(tags, str):
-                    tags = [tags]
-                for t in tags:
-                    t = str(t).strip()
-                    if t:
-                        style_counts[t] = style_counts.get(t, 0) + 1
-            return [s for s, c in style_counts.items() if c > 0]
+            if not hasattr(db, "get_tag_distribution"):
+                return []
+            dist = await db.get_tag_distribution(persona="")
+            styles = dist.get("style", {})
+            return [s for s, c in styles.items() if c > 0]
         except Exception as e:
             logger.warning("[DailySelfie] 获取风格池失败: %s", e)
             return []
@@ -435,18 +427,19 @@ class DailySelfieService:
             db = getattr(wardrobe, "db", None)
             if not db:
                 return []
+            if not hasattr(db, "list_images_lightweight"):
+                return []
             three_days_ago = (datetime.now() - timedelta(days=3)).strftime(_DATE_FMT)
-            import aiosqlite
-            async with aiosqlite.connect(db.db_path) as conn:
-                sql = (
-                    "SELECT style FROM images "
-                    "WHERE persona = '' AND created_at >= ? "
-                    "ORDER BY created_at DESC LIMIT 50"
-                )
-                cursor = await conn.execute(sql, [three_days_ago])
-                rows = await cursor.fetchall()
+            images = await db.list_images_lightweight(
+                persona="", exclude_persona="",
+                sort_by="created_at", limit=50,
+            )
             styles: set[str] = set()
-            for (style_raw,) in rows:
+            for img in images:
+                created = str(img.get("created_at", "") or "")[:10]
+                if created < three_days_ago:
+                    continue
+                style_raw = img.get("style", "")
                 if not style_raw:
                     continue
                 try:

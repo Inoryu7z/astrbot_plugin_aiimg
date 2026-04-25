@@ -1,3 +1,14 @@
+### v1.1.6
+
+**🐛 补画功能审查修复**
+
+* 修复严重Bug：全局 `on_provider_request` 回调误将所有文生图/改图请求计入补画额度，导致正常用户请求消耗补画配额。改为补画流程内直接计数。
+* 修复数据库耦合：`_get_style_pool()` 和 `_get_recent_styles()` 从直接 SQL 访问衣橱数据库改为调用衣橱插件公开 API（`get_tag_distribution` / `list_images_lightweight`），移除 `aiosqlite` 依赖。
+* 修复 LLM 人格上下文：系统提示词中加入人格名称，让 LLM 以该人格视角选择风格和构建提示词。
+* 修复参考图搜索：`current_persona` 从硬编码空字符串改为传入实际人格名，避免搜索到当前人格自己的图片。
+
+---
+
 ### v1.1.5
 
 **📸 每日自动补画（薅羊毛）功能**

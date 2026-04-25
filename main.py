@@ -152,12 +152,6 @@ class GiteeAIImagePlugin(Star):
         self.daily_selfie = DailySelfieService(self)
         await self.daily_selfie.start()
 
-        # 注册 provider 请求计数回调
-        async def _on_provider_request(provider_id: str):
-            await self.daily_selfie.counter.increment(provider_id)
-        self.edit.on_provider_request = _on_provider_request
-        self.draw.on_provider_request = _on_provider_request
-
         logger.info(
             f"[GiteeAIImagePlugin] 插件初始化完成: "
             f"改图后端={self.edit.get_available_backends()}, "
