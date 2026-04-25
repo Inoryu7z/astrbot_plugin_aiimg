@@ -125,10 +125,10 @@ _ROUND1_USER_PROMPT = (
 )
 
 _ROUND2_USER_PROMPT = (
+    "本次选择的拍摄方案：\n{style_summary}\n\n"
     "参考图描述（第{batch_num}批，共{total_batch}批）：\n"
     "{descriptions}\n\n"
-    "请为以上 {count} 张参考图构建提示词。\n"
-    "本次为第 {m} 到第 {n} 张。\n\n"
+    "请为以上 {count} 张参考图构建提示词。\n\n"
     "约束：\n"
     "- 直接返回 {count} 条提示词，每条一行\n"
     "- 禁止调用aiimg_generate工具"
@@ -265,18 +265,42 @@ class DailySelfieService:
                 total_success, total_fail,
             )
 
-    async def _get_persona_system_prompt(self, persona_name: str) -> str:
+    def _get_persona_system_prompt(self, persona_name: str) -> str:
         try:
             persona_mgr = getattr(self.plugin.context, "persona_manager", None)
             if not persona_mgr:
                 return ""
-            persona = await persona_mgr.get_persona(persona_name)
-            if persona and hasattr(persona, "system_prompt"):
-                return persona.system_prompt or ""
+            if hasattr(persona_mgr, "get_persona_v3_by_id"):
+                persona = persona_mgr.get_persona_v3_by_id(persona_name)
+                if persona and isinstance(persona, dict):
+                    return persona.get("prompt", "") or ""
             return ""
         except Exception as e:
             logger.warning("[DailySelfie] 获取人格 system prompt 失败: %s", e)
             return ""
+
+    def _get_default_chat_provider_id(self) -> str | None:
+        try:
+            provider = self.plugin.context.get_using_provider()
+            if provider:
+                meta = provider.meta()
+                if meta and getattr(meta, "id", None):
+                    return str(meta.id).strip() or None
+        except Exception:
+            pass
+        try:
+            pm = getattr(self.plugin.context, "provider_manager", None)
+            if pm and hasattr(pm, "provider_insts"):
+                for p in pm.provider_insts:
+                    try:
+                        m = p.meta()
+                        if m and getattr(m, "id", None):
+                            return str(m.id).strip()
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
 
     async def _process_persona_selfie(
         self,
@@ -294,11 +318,16 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 开始处理人格 %s，剩余额度 %d", persona_name, remaining)
 
-        persona_system_prompt = await self._get_persona_system_prompt(persona_name)
+        chat_provider_id = self._get_default_chat_provider_id()
+        if not chat_provider_id:
+            logger.error("[DailySelfie] 无法获取默认 LLM Provider，跳过人格 %s", persona_name)
+            return 0, 0
+
+        persona_system_prompt = self._get_persona_system_prompt(persona_name)
         if not persona_system_prompt:
             logger.warning("[DailySelfie] 人格 %s 未找到 system prompt，使用空人格上下文", persona_name)
 
-        queries = await self._llm_round1(persona_system_prompt, remaining, style_pool, recent_styles)
+        queries = await self._llm_round1(chat_provider_id, persona_system_prompt, remaining, style_pool, recent_styles)
         if not queries:
             logger.warning("[DailySelfie] 人格 %s LLM第1轮未返回查询", persona_name)
             return 0, 0
@@ -310,9 +339,8 @@ class DailySelfieService:
 
         batch_size = 5
         all_prompts: list[tuple[str, dict]] = []
-
         total_batches = (len(ref_results) + batch_size - 1) // batch_size
-        prompt_idx = 0
+        style_summary = "\n".join(f"- {q}" for q in queries)
 
         for batch_num, batch_start in enumerate(range(0, len(ref_results), batch_size), 1):
             batch = ref_results[batch_start:batch_start + batch_size]
@@ -333,14 +361,13 @@ class DailySelfieService:
                 continue
 
             prompts = await self._llm_round2(
-                persona_system_prompt, descriptions, len(descriptions),
+                chat_provider_id, persona_system_prompt, descriptions, len(descriptions),
                 batch_num=batch_num, total_batch=total_batches,
-                start_idx=prompt_idx + 1,
+                style_summary=style_summary,
             )
             for i, prompt in enumerate(prompts):
                 if i < len(batch):
                     all_prompts.append((prompt.strip(), batch[i]))
-            prompt_idx += len(descriptions)
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
@@ -388,6 +415,7 @@ class DailySelfieService:
 
     async def _llm_round1(
         self,
+        chat_provider_id: str,
         persona_system_prompt: str,
         remaining: int,
         style_pool: list[str],
@@ -406,6 +434,7 @@ class DailySelfieService:
 
         try:
             resp = await self.plugin.context.llm_generate(
+                chat_provider_id=chat_provider_id,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
             )
@@ -420,13 +449,14 @@ class DailySelfieService:
 
     async def _llm_round2(
         self,
+        chat_provider_id: str,
         persona_system_prompt: str,
         descriptions: list[str],
         count: int,
         *,
         batch_num: int = 1,
         total_batch: int = 1,
-        start_idx: int = 1,
+        style_summary: str = "",
     ) -> list[str]:
         desc_text = "\n".join(f"- {d}" for d in descriptions)
 
@@ -441,12 +471,12 @@ class DailySelfieService:
             total_batch=total_batch,
             descriptions=desc_text,
             count=count,
-            m=start_idx,
-            n=start_idx + count - 1,
+            style_summary=style_summary,
         )
 
         try:
             resp = await self.plugin.context.llm_generate(
+                chat_provider_id=chat_provider_id,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
             )

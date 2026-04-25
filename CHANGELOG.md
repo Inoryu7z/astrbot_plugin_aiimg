@@ -3,11 +3,13 @@
 **🧠 补画 LLM 交互重构：人格注入 + 内联 Skill 规则**
 
 * 重构补画 LLM 交互：从简单提示词改为"人格 system prompt + 拍照任务模式 + 内联 skill 规则"三层架构
-* 新增人格注入：通过 `persona_manager.get_persona()` 读取人格完整 system prompt，拼入 LLM 调用的 system prompt
+* 新增人格注入：通过 `persona_manager.get_persona_v3_by_id()` 读取人格完整 system prompt，拼入 LLM 调用的 system prompt
 * 内联 selfie-reference-router skill 规则：固定开头模板、自拍母规则、强制要求直接写入 system prompt，无需独立 skill 文件
 * 参考强度转化为自然语言指引：衣橱返回的 ref_strength（full/reimagine/style）转为具体指引文本，避免元概念
 * 第2轮 LLM 输出完整提示词（含固定开头），第1轮风格描述直接用作向量检索查询
 * 去掉强制结尾"完全保留她的面部特征。"
+* 修复 `llm_generate()` 缺少必需参数 `chat_provider_id`，新增 `_get_default_chat_provider_id()` 获取全局默认 provider
+* 修复第2轮 LLM 无对话上下文问题，将第1轮风格描述传入第2轮用户消息
 
 ---
 
