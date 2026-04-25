@@ -75,32 +75,63 @@ class DailyQuotaCounter:
         return self._data.get("date", "")
 
 
-_SYSTEM_PROMPT_ROUND1 = (
-    "你是一位正在准备今日写真拍摄的虚拟角色，你的名字是{persona_name}。\n\n"
-    "根据你的人格特征和喜好，选择你今天想要拍摄的服装风格和场景。\n\n"
-    "规则：\n"
-    "- 你需要选择 {remaining} 种不同的拍摄方案\n"
-    "- 每种方案用一句自然语言描述，包含服装风格、场景和姿势（例如：在校园湖边穿着甜系洛丽塔裙优雅地散步）\n"
-    "- 描述要具体，便于图库检索\n"
-    "- 尽量选择不同风格，避免重复\n"
-    "- 选择应符合你的人格气质和喜好\n"
-    "- 如果近期已选择过某些风格，请优先尝试其他风格，但如果你真的很想穿也可以\n\n"
-    "可用风格池（仅列出衣橱中实际有图的风格）：\n{style_pool}\n\n"
-    "近期已选择的风格（近3天）：\n{recent_styles}\n\n"
-    "请直接返回 {remaining} 条自然语言描述，每条一行，不要编号，不要额外解释。"
+_TASK_MODE_SYSTEM_PROMPT = (
+    "【自动拍照任务模式】\n\n"
+    "当收到自动拍照任务时，你需要完成以下流程：\n"
+    "1. 选择拍摄方案（自然语言描述服装风格、场景、姿势）\n"
+    "2. 等待系统返回参考图描述\n"
+    "3. 按照提示词构建规则构建提示词\n\n"
+    "约束：\n"
+    "- 每次任务选择多种不同风格、姿势、构图，大胆与保守兼顾\n"
+    "- 优先选择近期未尝试过的风格\n"
+    "- 输出格式：每条一行，不编号，不解释\n"
+    "- 禁止调用aiimg_generate工具"
 )
 
-_SYSTEM_PROMPT_ROUND2 = (
-    "你是一位虚拟角色，名字是{persona_name}，正在为今日写真构建提示词。\n\n"
-    "根据提供的参考图描述，为每张参考图构建一个用于AI绘画的提示词。\n\n"
-    "规则：\n"
-    "- 提示词应描述一张高质量的自拍照\n"
-    "- 保持你的人格特征和气质\n"
-    "- 参考图描述仅作为服装/姿势/场景的灵感来源\n"
-    "- 每个提示词应该不同，体现不同的风格和场景\n"
-    "- 提示词使用中文\n\n"
-    "参考图描述：\n{descriptions}\n\n"
-    "请直接返回 {count} 条提示词，每条一行，不要编号，不要额外解释。"
+_SKILL_RULES_SYSTEM_PROMPT = (
+    "## 提示词构建规则\n\n"
+    "### 固定开头\n"
+    "每条提示词必须以以下固定开头开始：\n"
+    "\"以前3张参考图中的同一少女为基准，完整保留她的五官、身材等全部人体身份特征，"
+    "绝对禁止任何拼图，为她生成一张单人的自然生活照："
+    "她有着白皙细腻的皮肤，纤细的身姿与格外饱满的曲线形成鲜明对比，\"\n\n"
+    "### 自拍母规则\n"
+    "在固定开头之后，按以下逻辑构建画面，最终串联成一段连贯的自然语言视觉描述：\n"
+    "1. 最终输出只能是一整段连贯、通顺、符合语法逻辑的自然长句，不要输出分析、分点、规则解释\n"
+    "2. 核心结构始终是：主体人物 + 具体动作 + 所处环境\n"
+    "3. 只描述可直接视觉化的内容，不要写声音、气味、触感等不可见信息\n"
+    "4. 一般地，大部分构图采用中近景\n"
+    "5. 穿搭描述必须遵守可见性原则：只写画面里能看见的服装结构与层次，不写完全被遮挡的内容\n"
+    "6. 如果要调整动作姿势，则必须写完整，并且必须明确头部朝向与眼神朝向；笑容只用\"微笑\"\n"
+    "7. 整体目标是单人、自然、高清、写实的生活照，不是海报、插画、拼图或宣传图\n"
+    "8. 每条参考图描述后会附带具体指引，请严格按照指引处理该参考图\n\n"
+    "### 强制要求\n"
+    "- 最终提示词必须使用中文\n"
+    "- 不得使用或生成任何文字、标识或象征性元素\n"
+    "- 人物的视觉年龄应符合设定\n"
+    "- 面部必须完整露出\n"
+    "- 姿势必须物理可行。人物只有两只手和两条腿，不能同时处于矛盾状态，"
+    "尤其需要注意图片的描述与你所构建的提示词之间是否冲突\n"
+    "- 优先使用服装状态变化或动作间接营造性感效果，而非直接描述敏感身体部位"
+)
+
+_ROUND1_USER_PROMPT = (
+    "你在整理衣橱时发现，今天还有 {remaining} 次拍照额度没用完。\n\n"
+    "衣橱中可选的风格：\n{style_pool}\n\n"
+    "近3天已拍过的风格：\n{recent_styles}\n\n"
+    "请选择 {remaining} 种不同的拍摄方案，每种方案用一句话描述（包含服装风格、场景、姿势）。\n"
+    "要求：风格多样化，优先选择近期未尝试的。\n\n"
+    "直接返回 {remaining} 条描述，每条一行。"
+)
+
+_ROUND2_USER_PROMPT = (
+    "参考图描述（第{batch_num}批，共{total_batch}批）：\n"
+    "{descriptions}\n\n"
+    "请为以上 {count} 张参考图构建提示词。\n"
+    "本次为第 {m} 到第 {n} 张。\n\n"
+    "约束：\n"
+    "- 直接返回 {count} 条提示词，每条一行\n"
+    "- 禁止调用aiimg_generate工具"
 )
 
 
@@ -234,6 +265,19 @@ class DailySelfieService:
                 total_success, total_fail,
             )
 
+    async def _get_persona_system_prompt(self, persona_name: str) -> str:
+        try:
+            persona_mgr = getattr(self.plugin.context, "persona_manager", None)
+            if not persona_mgr:
+                return ""
+            persona = await persona_mgr.get_persona(persona_name)
+            if persona and hasattr(persona, "system_prompt"):
+                return persona.system_prompt or ""
+            return ""
+        except Exception as e:
+            logger.warning("[DailySelfie] 获取人格 system prompt 失败: %s", e)
+            return ""
+
     async def _process_persona_selfie(
         self,
         persona: dict,
@@ -250,7 +294,11 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 开始处理人格 %s，剩余额度 %d", persona_name, remaining)
 
-        queries = await self._llm_round1(persona_name, remaining, style_pool, recent_styles)
+        persona_system_prompt = await self._get_persona_system_prompt(persona_name)
+        if not persona_system_prompt:
+            logger.warning("[DailySelfie] 人格 %s 未找到 system prompt，使用空人格上下文", persona_name)
+
+        queries = await self._llm_round1(persona_system_prompt, remaining, style_pool, recent_styles)
         if not queries:
             logger.warning("[DailySelfie] 人格 %s LLM第1轮未返回查询", persona_name)
             return 0, 0
@@ -261,19 +309,38 @@ class DailySelfieService:
             return 0, 0
 
         batch_size = 5
-        prompt_idx = 0
         all_prompts: list[tuple[str, dict]] = []
 
-        for batch_start in range(0, len(ref_results), batch_size):
+        total_batches = (len(ref_results) + batch_size - 1) // batch_size
+        prompt_idx = 0
+
+        for batch_num, batch_start in enumerate(range(0, len(ref_results), batch_size), 1):
             batch = ref_results[batch_start:batch_start + batch_size]
-            descriptions = [r.get("description", "") for r in batch if r.get("description")]
+            descriptions = []
+            for r in batch:
+                desc = r.get("description", "")
+                if not desc:
+                    continue
+                strength = r.get("ref_strength", "style") or "style"
+                if strength == "full":
+                    guide = "请完整保留这张参考图的全部视觉细节，包括姿势动作、构图与服装"
+                elif strength == "reimagine":
+                    guide = "请仅提取这张参考图的服装款式信息，完全重新设计姿势与构图"
+                else:
+                    guide = "请保留这张参考图的服装与整体氛围，对姿势或构图做出明确的小变动"
+                descriptions.append(f"{desc}\n指引：{guide}")
             if not descriptions:
                 continue
 
-            prompts = await self._llm_round2(persona_name, descriptions, len(descriptions))
+            prompts = await self._llm_round2(
+                persona_system_prompt, descriptions, len(descriptions),
+                batch_num=batch_num, total_batch=total_batches,
+                start_idx=prompt_idx + 1,
+            )
             for i, prompt in enumerate(prompts):
                 if i < len(batch):
                     all_prompts.append((prompt.strip(), batch[i]))
+            prompt_idx += len(descriptions)
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
@@ -321,7 +388,7 @@ class DailySelfieService:
 
     async def _llm_round1(
         self,
-        persona_name: str,
+        persona_system_prompt: str,
         remaining: int,
         style_pool: list[str],
         recent_styles: list[str],
@@ -329,14 +396,13 @@ class DailySelfieService:
         style_pool_text = "、".join(style_pool) if style_pool else "无可用风格"
         recent_text = "、".join(recent_styles) if recent_styles else "无"
 
-        system_prompt = _SYSTEM_PROMPT_ROUND1.format(
-            persona_name=persona_name,
+        system_prompt = f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}" if persona_system_prompt else _TASK_MODE_SYSTEM_PROMPT
+
+        user_prompt = _ROUND1_USER_PROMPT.format(
             remaining=remaining,
             style_pool=style_pool_text,
             recent_styles=recent_text,
         )
-
-        user_prompt = f"你好，{persona_name}！今天还有 {remaining} 张写真额度，请选择你今天想拍的风格吧。"
 
         try:
             resp = await self.plugin.context.llm_generate(
@@ -354,19 +420,30 @@ class DailySelfieService:
 
     async def _llm_round2(
         self,
-        persona_name: str,
+        persona_system_prompt: str,
         descriptions: list[str],
         count: int,
+        *,
+        batch_num: int = 1,
+        total_batch: int = 1,
+        start_idx: int = 1,
     ) -> list[str]:
         desc_text = "\n".join(f"- {d}" for d in descriptions)
 
-        system_prompt = _SYSTEM_PROMPT_ROUND2.format(
-            persona_name=persona_name,
-            descriptions=desc_text,
-            count=count,
+        system_prompt = (
+            f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}\n\n{_SKILL_RULES_SYSTEM_PROMPT}"
+            if persona_system_prompt
+            else f"{_TASK_MODE_SYSTEM_PROMPT}\n\n{_SKILL_RULES_SYSTEM_PROMPT}"
         )
 
-        user_prompt = f"{persona_name}，请根据以上参考图描述，为每张图构建一个自拍提示词。"
+        user_prompt = _ROUND2_USER_PROMPT.format(
+            batch_num=batch_num,
+            total_batch=total_batch,
+            descriptions=desc_text,
+            count=count,
+            m=start_idx,
+            n=start_idx + count - 1,
+        )
 
         try:
             resp = await self.plugin.context.llm_generate(
