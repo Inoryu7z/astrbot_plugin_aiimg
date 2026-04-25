@@ -1,21 +1,16 @@
-### v1.1.6
-
-**🛡️ Tool Result 增加 send_message_to_user 禁令三明治强调**
-
-* 修改 `_build_llm_tool_text_desc_result`：在 text 模式返回文本首尾加入 `[IMPORTANT]` 标签强调，提醒 LLM 图片已自动发送、严禁使用 `send_message_to_user` 发送图片。
-* 修改 `_build_llm_tool_image_result`：在 image 模式中，`ImageContent` 前后各插入一条 `TextContent`，形成三明治结构强化禁令。
-* 解决 LLM 在工具调用返回后"忘记"工具描述中禁令、违规调用 `send_message_to_user` 重复发送图片的问题。
-
----
-
 ### v1.1.5
 
-**🐛 LLM 工具调用失败时返回错误信息给对话模型**
+**📸 每日自动补画（薅羊毛）功能**
 
-* 修复生图/改图/视频工具失败时 LLM 无法感知的问题：之前工具失败返回 `None`，对话模型完全不知道图片生成失败。
-* 新增 `_build_llm_tool_failure_result` 方法，在工具失败时返回包含错误原因的 `CallToolResult`，使 LLM 能获知失败原因并告知用户。
-* 覆盖所有失败场景：功能未启用、请求频率限制、并发限制、图片缺失、生成异常（如敏感内容检测）、图片发送失败等。
-* 保留原有的 emoji/戳一戳用户反馈机制不变。
+* 新增 `daily_selfie` 模块，支持在每日指定时间自动检查并补画未用完的免费额度。
+* 新增配置项：
+  - `features.selfie.daily_selfie_schedule_time` — 定时触发时间（默认 23:30）
+  - `selfie_persona_1/2.daily_selfie_enabled` — 是否启用补画
+  - `selfie_persona_1/2.daily_selfie_limit` — 每日额度上限
+  - `selfie_persona_1/2.daily_selfie_provider_id` — 计数提供商 ID
+* 新增命令：`/补画`（手动触发）、`/补画状态`（查看额度）
+* 补画流程：LLM 选择风格 → 衣橱向量检索参考图 → LLM 构建提示词 → 串行生图（5s间隔）→ 静默存入衣橱
+* 计数机制：通过 `on_provider_request` 回调在请求前计数，宁可多算不少算
 
 ---
 

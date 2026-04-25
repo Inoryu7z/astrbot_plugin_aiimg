@@ -147,6 +147,17 @@ class GiteeAIImagePlugin(Star):
         # 动态注册预设命令 (方案C: /手办化 直接触发)
         self._register_preset_commands()
 
+        # 每日补画服务
+        from .core.daily_selfie import DailySelfieService
+        self.daily_selfie = DailySelfieService(self)
+        await self.daily_selfie.start()
+
+        # 注册 provider 请求计数回调
+        async def _on_provider_request(provider_id: str):
+            await self.daily_selfie.counter.increment(provider_id)
+        self.edit.on_provider_request = _on_provider_request
+        self.draw.on_provider_request = _on_provider_request
+
         logger.info(
             f"[GiteeAIImagePlugin] 插件初始化完成: "
             f"改图后端={self.edit.get_available_backends()}, "
@@ -984,6 +995,43 @@ class GiteeAIImagePlugin(Star):
 
         await mark_failed(event)
         event.stop_event()
+
+    # ==================== 每日补画 ====================
+
+    @filter.command("补画")
+    async def daily_selfie_command(self, event: AstrMessageEvent):
+        """手动触发每日补画，自动计算缺口并补画。
+
+        用法:
+        - /补画
+        """
+        event.should_call_llm(True)
+        if not hasattr(self, "daily_selfie") or not self.daily_selfie:
+            yield event.plain_result("补画功能未启用。请先在配置中开启人格的每日补画。")
+            return
+        yield event.plain_result("⏳ 补画任务已启动，请稍候查看后台日志...")
+        asyncio.create_task(self.daily_selfie.run_daily_selfie())
+
+    @filter.command("补画状态")
+    async def daily_selfie_status_command(self, event: AstrMessageEvent):
+        """查看每日补画状态，包括各提供商的已用/剩余额度。
+
+        用法:
+        - /补画状态
+        """
+        if not hasattr(self, "daily_selfie") or not self.daily_selfie:
+            yield event.plain_result("补画功能未启用。")
+            return
+        status = await self.daily_selfie.get_status()
+        lines = [f"📅 日期：{status['date']}"]
+        if not status["personas"]:
+            lines.append("暂无启用补画的人格。")
+        for p in status["personas"]:
+            lines.append(
+                f"👤 {p['persona_name']} | 提供商: {p['provider_id']} | "
+                f"已用: {p['used']}/{p['limit']} | 剩余: {p['remaining']}"
+            )
+        yield event.plain_result("\n".join(lines))
 
     # ==================== 视频生成 ====================
 
@@ -2258,17 +2306,13 @@ class GiteeAIImagePlugin(Star):
             if not compressed_bytes:
                 return None
             b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
-            prefix = "[IMPORTANT] 图片已自动发送给用户，严禁使用 send_message_to_user 发送图片 [IMPORTANT]"
-            suffix = "[IMPORTANT] 严禁使用 send_message_to_user 发送图片，图片已自动发送 [IMPORTANT]"
             return mcp.types.CallToolResult(
                 content=[
-                    mcp.types.TextContent(type="text", text=prefix),
                     mcp.types.ImageContent(
                         type="image",
                         data=b64_data,
                         mimeType="image/jpeg",
-                    ),
-                    mcp.types.TextContent(type="text", text=suffix),
+                    )
                 ]
             )
         except Exception as e:
@@ -2285,12 +2329,7 @@ class GiteeAIImagePlugin(Star):
     @staticmethod
     def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
-        body = f"发送了一张图片" + (f"：{desc}" if desc else "")
-        text = (
-            "[IMPORTANT] 图片已自动发送给用户，严禁使用 send_message_to_user 发送图片 [IMPORTANT] "
-            + body
-            + " [IMPORTANT] 严禁使用 send_message_to_user 发送图片，图片已自动发送 [IMPORTANT]"
-        )
+        text = f"发送了一张图片" + (f"：{desc}" if desc else "")
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
@@ -2694,6 +2733,60 @@ class GiteeAIImagePlugin(Star):
             await mark_failed(event)
         finally:
             await self._end_user_job(user_id, kind="image")
+
+    async def _generate_daily_selfie_image(
+            self,
+            persona_name: str,
+            prompt: str,
+            ref_image_path: str,
+            ref_strength: str = "style",
+            persona_conf: dict | None = None,
+    ) -> Path | None:
+        ref_paths = self._get_persona_config_selfie_reference_paths(persona_name)
+        if not ref_paths:
+            logger.warning("[daily_selfie] 人格 %s 无参考照，跳过", persona_name)
+            return None
+
+        if ref_image_path:
+            p = Path(ref_image_path)
+            if p.exists():
+                ref_paths.append(p)
+
+        ref_images = await self._read_paths_bytes(ref_paths)
+        if not ref_images:
+            logger.warning("[daily_selfie] 人格 %s 参考照读取失败", persona_name)
+            return None
+
+        chain_override = self._get_persona_selfie_chain(persona_name)
+        if not chain_override:
+            logger.warning("[daily_selfie] 人格 %s 未配置自拍链路", persona_name)
+            return None
+
+        size = None
+        if persona_conf:
+            default_output = str(persona_conf.get("default_output", "") or "").strip()
+            if default_output:
+                size = default_output
+
+        prompt_prefix = str(persona_conf.get("prompt_prefix", "") or "").strip() if persona_conf else ""
+
+        final_prompt = self._build_selfie_prompt(
+            prompt, extra_refs=1 if ref_image_path else 0, prompt_prefix=prompt_prefix
+        )
+
+        logger.info(
+            "[daily_selfie] persona=%s prompt=%s providers=%s",
+            persona_name,
+            final_prompt[:100],
+            [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
+        )
+
+        return await self.edit.edit(
+            prompt=final_prompt,
+            images=ref_images,
+            size=size,
+            chain_override=chain_override,
+        )
 
     async def _set_selfie_reference(
             self, event: AstrMessageEvent, persona_name: str | None = None
