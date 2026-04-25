@@ -266,6 +266,13 @@ class DailySelfieService:
         total_fail = 0
         request_interval = 5
 
+        debug_mode = self._is_debug()
+        selfie_conf = self.plugin._get_feature("selfie")
+        logger.info(
+            "[DailySelfie] 补画开始: 人格数=%d debug=%s selfie_conf_keys=%s",
+            len(personas), debug_mode, list(selfie_conf.keys()),
+        )
+
         try:
             style_pool = await self._get_style_pool(wardrobe)
             recent_styles = await self._get_recent_styles(wardrobe)
