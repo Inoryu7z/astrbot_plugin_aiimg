@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -10,6 +11,29 @@ from typing import Any, Optional
 logger = logging.getLogger("astrbot_plugin_aiimg.daily_selfie")
 
 _DATE_FMT = "%Y-%m-%d"
+
+_NUMBER_PREFIX_RE = re.compile(r'^[\d]+[.、)\]】]\s*')
+_BULLET_PREFIX_RE = re.compile(r'^[-•*]\s+')
+
+
+def _clean_llm_line(line: str) -> str:
+    line = line.strip()
+    if not line:
+        return ""
+    line = _NUMBER_PREFIX_RE.sub('', line)
+    line = _BULLET_PREFIX_RE.sub('', line)
+    return line.strip()
+
+
+def _parse_llm_lines(text: str, limit: int) -> list[str]:
+    lines = []
+    for raw in text.split("\n"):
+        cleaned = _clean_llm_line(raw)
+        if cleaned:
+            lines.append(cleaned)
+        if len(lines) >= limit:
+            break
+    return lines
 
 
 class DailyQuotaCounter:
@@ -46,6 +70,9 @@ class DailyQuotaCounter:
         except Exception as e:
             logger.warning("[DailySelfie] 计数器文件保存失败: %s", e)
 
+    async def _save_async(self):
+        await asyncio.to_thread(self._save)
+
     async def increment(self, provider_id: str, amount: int = 1) -> int:
         async with self._lock:
             self._ensure_date()
@@ -53,7 +80,7 @@ class DailyQuotaCounter:
             cur = int(counts.get(provider_id, 0))
             new_val = cur + amount
             counts[provider_id] = new_val
-            self._save()
+            await self._save_async()
             return new_val
 
     async def get_count(self, provider_id: str) -> int:
@@ -345,6 +372,7 @@ class DailySelfieService:
         for batch_num, batch_start in enumerate(range(0, len(ref_results), batch_size), 1):
             batch = ref_results[batch_start:batch_start + batch_size]
             descriptions = []
+            valid_refs = []
             for r in batch:
                 desc = r.get("description", "")
                 if not desc:
@@ -357,6 +385,7 @@ class DailySelfieService:
                 else:
                     guide = "请保留这张参考图的服装与整体氛围，对姿势或构图做出明确的小变动"
                 descriptions.append(f"{desc}\n指引：{guide}")
+                valid_refs.append(r)
             if not descriptions:
                 continue
 
@@ -366,8 +395,8 @@ class DailySelfieService:
                 style_summary=style_summary,
             )
             for i, prompt in enumerate(prompts):
-                if i < len(batch):
-                    all_prompts.append((prompt.strip(), batch[i]))
+                if i < len(valid_refs):
+                    all_prompts.append((prompt.strip(), valid_refs[i]))
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
@@ -441,8 +470,7 @@ class DailySelfieService:
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
                 return []
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-            return lines[:remaining]
+            return _parse_llm_lines(text, remaining)
         except Exception as e:
             logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
             return []
@@ -483,8 +511,7 @@ class DailySelfieService:
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
                 return []
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-            return lines[:count]
+            return _parse_llm_lines(text, count)
         except Exception as e:
             logger.error("[DailySelfie] LLM第2轮调用失败: %s", e)
             return []
@@ -536,25 +563,34 @@ class DailySelfieService:
                 return []
             if not hasattr(db, "list_images_lightweight"):
                 return []
-            three_days_ago = (datetime.now() - timedelta(days=3)).strftime(_DATE_FMT)
+            three_days_ago = datetime.now() - timedelta(days=3)
             images = await db.list_images_lightweight(
                 persona="", exclude_persona="",
                 sort_by="created_at", limit=50,
             )
             styles: set[str] = set()
             for img in images:
-                created = str(img.get("created_at", "") or "")[:10]
-                if created < three_days_ago:
-                    continue
+                created_raw = str(img.get("created_at", "") or "")[:10]
+                if created_raw:
+                    try:
+                        created_dt = datetime.strptime(created_raw, _DATE_FMT)
+                        if created_dt < three_days_ago:
+                            continue
+                    except ValueError:
+                        pass
                 style_raw = img.get("style", "")
                 if not style_raw:
                     continue
                 try:
-                    tags = json.loads(style_raw) if isinstance(style_raw, str) else [style_raw]
+                    tags = json.loads(style_raw) if isinstance(style_raw, str) else style_raw
                 except (json.JSONDecodeError, TypeError):
                     tags = [style_raw] if style_raw else []
                 if isinstance(tags, str):
                     tags = [tags]
+                elif isinstance(tags, dict):
+                    tags = list(tags.values()) if tags.values() else list(tags.keys())
+                if not isinstance(tags, list):
+                    tags = [tags] if tags else []
                 for t in tags:
                     t = str(t).strip()
                     if t:

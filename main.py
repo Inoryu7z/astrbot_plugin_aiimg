@@ -1004,7 +1004,7 @@ class GiteeAIImagePlugin(Star):
             yield event.plain_result("补画功能未启用。请先在配置中开启人格的每日补画。")
             return
         yield event.plain_result("⏳ 补画任务已启动，请稍候查看后台日志...")
-        asyncio.create_task(self.daily_selfie.run_daily_selfie())
+        await self.daily_selfie.run_daily_selfie()
 
     @filter.command("补画状态")
     async def daily_selfie_status_command(self, event: AstrMessageEvent):
@@ -2779,6 +2779,7 @@ class GiteeAIImagePlugin(Star):
             prompt=final_prompt,
             images=ref_images,
             size=size,
+            resolution=None,
             chain_override=chain_override,
         )
 
