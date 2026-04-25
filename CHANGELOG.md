@@ -1,3 +1,18 @@
+### v1.1.8
+
+**🐛 补画功能代码审查修复**
+
+* 修复 LLM 输出编号前缀未清理：新增 `_clean_llm_line()` / `_parse_llm_lines()` 工具函数，自动清理 `1. `, `- `, `• ` 等前缀
+* 修复 `_save()` 同步 I/O 阻塞事件循环：新增 `_save_async()` 使用 `asyncio.to_thread()` 包装
+* 修复 `/补画` 命令 task 未追踪：改为 `await` 而非 `create_task`
+* 修复 `_get_recent_styles()` 日期字符串比较：改用 `datetime` 对象比较
+* 修复 `_get_recent_styles()` JSON 解析：处理 dict 类型 style_raw，确保 tags 始终为 list
+* 修复 prompt-batch 对齐错位：新增 `valid_refs` 列表，避免 prompt 与参考图配对错误
+* 修复 `_generate_daily_selfie_image` 未传 `resolution` 参数
+* 清理 `on_provider_request` 未使用钩子（edit_router.py / draw_service.py）
+
+---
+
 ### v1.1.7
 
 **🧠 补画 LLM 交互重构：人格注入 + 内联 Skill 规则**
