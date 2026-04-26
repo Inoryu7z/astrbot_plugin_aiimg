@@ -192,7 +192,8 @@ class OpenAICompatBackend:
         timeout: int = 120,
         max_retries: int = 2,
         default_model: str = "",
-        default_size: str = "4096x4096",
+        default_size: str = "1024x1024",
+        default_edit_size: str | None = None,
         supports_edit: bool = True,
         extra_body: dict | None = None,
         proxy_url: str | None = None,
@@ -206,8 +207,10 @@ class OpenAICompatBackend:
         self.max_retries = int(max_retries or 2)
         self.default_model = str(default_model or "").strip()
         self.default_size = normalize_size_text(
-            str(default_size or "4096x4096").strip()
+            str(default_size or "1024x1024").strip()
         )
+        _des = str(default_edit_size or "").strip()
+        self.default_edit_size = normalize_size_text(_des) if _des else None
         self.supports_edit = bool(supports_edit)
         self.extra_body = extra_body or {}
         self.proxy_url = str(proxy_url or "").strip() or None
@@ -305,13 +308,17 @@ class OpenAICompatBackend:
         )
 
     def _resolve_size(
-        self, size: str | None, resolution: str | None
+        self,
+        size: str | None,
+        resolution: str | None,
+        *,
+        fallback_default: str | None = None,
     ) -> tuple[str, str, bool]:
         raw = normalize_size_text(size)
         if not raw:
             raw = normalize_size_text(resolution_to_size(resolution or ""))
         if not raw:
-            raw = self.default_size
+            raw = fallback_default or self.default_size
 
         if not self.allowed_sizes:
             return raw, raw, False
@@ -322,14 +329,20 @@ class OpenAICompatBackend:
         requested_ratio = size_to_ratio(raw)
         fallback = ""
         if requested_ratio:
-            default_ratio = size_to_ratio(self.default_size)
+            default_ratio = size_to_ratio(fallback_default or self.default_size)
+            effective_default = fallback_default or self.default_size
             if (
-                self.default_size in self.allowed_sizes
+                effective_default in self.allowed_sizes
                 and default_ratio == requested_ratio
             ):
-                fallback = self.default_size
+                fallback = effective_default
             else:
                 fallback = self._ratio_defaults.get(requested_ratio, "")
+
+        if not fallback:
+            effective_default = fallback_default or self.default_size
+            if effective_default in self.allowed_sizes:
+                fallback = effective_default
 
         if not fallback and self.default_size in self.allowed_sizes:
             fallback = self.default_size
@@ -458,7 +471,10 @@ class OpenAICompatBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size, raw_size, fallback_used = self._resolve_size(size, resolution)
+        edit_default = self.default_edit_size or self.default_size
+        final_size, raw_size, fallback_used = self._resolve_size(
+            size, resolution, fallback_default=edit_default
+        )
         if fallback_used:
             logger.warning(
                 "[OpenAICompat][generate] 不支持的 size='%s'，已兜底为 '%s'",

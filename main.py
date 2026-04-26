@@ -850,11 +850,13 @@ class GiteeAIImagePlugin(Star):
 
     @filter.command("自拍")
     async def selfie_command(self, event: AstrMessageEvent):
-        """使用“自拍参考照”生成 Bot 自拍。
+        """使用"自拍参考照"生成 Bot 自拍。
 
         用法:
-        - /自拍 <提示词>
+        - /自拍 <提示词> [比例]
         - 可附带多张参考图（衣服/姿势/场景）作为额外参考
+        - 支持比例: 1:1, 4:3, 3:4, 3:2, 2:3, 16:9, 9:16
+        示例: /自拍 可爱女孩 9:16
         """
         event.should_call_llm(True)
         prompt = self._extract_extra_prompt(event, "自拍")
@@ -2708,9 +2710,16 @@ class GiteeAIImagePlugin(Star):
             backend = override
             prompt = rest
 
+        size: str | None = None
+        parts = prompt.split()
+        if parts and parts[-1] in self.SUPPORTED_RATIOS:
+            ratio = parts[-1]
+            prompt = " ".join(parts[:-1]).strip()
+            size = self._resolve_ratio_size(ratio)
+
         try:
             await mark_processing(event)
-            image_path = await self._generate_selfie_image(event, prompt, backend)
+            image_path = await self._generate_selfie_image(event, prompt, backend, size=size)
             self._remember_last_image(event, image_path, mode="selfie")
             await self._trigger_wardrobe_auto_save(event)
             sent = await self._send_image_with_fallback(event, image_path)

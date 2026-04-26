@@ -681,8 +681,8 @@
       },
       "openai_images": {
         "name": "OpenAI Images",
-        "description": "适用于大多数实现了 /v1/images/* 的 OpenAI 兼容网关。",
-        "hint": "若服务商只在 Chat 返回图片，请改用 OpenAI Chat 图模板。",
+        "description": "适用于大多数实现了 /v1/images/* 的 OpenAI 兼容网关（含 gpt-image-2）。",
+        "hint": "若服务商只在 Chat 返回图片，请改用 OpenAI Chat 图模板。gpt-image-2 专用字段（quality 等）留空则不传。",
         "items": {
           "id": {
             "type": "string",
@@ -709,6 +709,7 @@
           "model": {
             "type": "string",
             "description": "模型名称",
+            "hint": "gpt-image-2 请填 gpt-image-2",
             "default": ""
           },
           "supports_edit": {
@@ -719,6 +720,7 @@
           "timeout": {
             "type": "int",
             "description": "超时(秒)",
+            "hint": "gpt-image-2 复杂提示词最长可达 2 分钟，建议设 180",
             "default": 120
           },
           "max_retries": {
@@ -734,12 +736,43 @@
           },
           "default_size": {
             "type": "string",
-            "description": "默认输出尺寸",
-            "default": "4096x4096"
+            "description": "文生图默认输出尺寸",
+            "hint": "gpt-image-2 要求宽高均为 16 的倍数，最大边 ≤ 3840px，总像素 655,360–8,294,400。",
+            "default": "1024x1024"
+          },
+          "default_edit_size": {
+            "type": "string",
+            "description": "图生图/自拍默认输出尺寸（留空则复用文生图默认尺寸）",
+            "hint": "如 1024x1792（约 9:16）。gpt-image-2 要求同上。",
+            "default": ""
+          },
+          "quality": {
+            "type": "string",
+            "description": "图像质量（gpt-image-2 专用，留空不传）",
+            "hint": "可选 auto / low / medium / high，仅 gpt-image-2 等支持此参数的模型有效。",
+            "default": ""
+          },
+          "output_format": {
+            "type": "string",
+            "description": "输出格式（gpt-image-2 专用，留空不传）",
+            "hint": "可选 png / jpeg / webp，仅 gpt-image-2 等支持此参数的模型有效。",
+            "default": ""
+          },
+          "output_compression": {
+            "type": "int",
+            "description": "输出压缩率 0-100（gpt-image-2 专用，仅 jpeg/webp，0=不传）",
+            "hint": "仅 output_format 为 jpeg 或 webp 时有效，0 表示不传此参数。",
+            "default": 0
+          },
+          "moderation": {
+            "type": "string",
+            "description": "内容审核级别（gpt-image-2 专用，留空不传）",
+            "hint": "可选 auto / low，仅 gpt-image-2 等支持此参数的模型有效。",
+            "default": ""
           },
           "extra_body": {
             "type": "object",
-            "description": "额外请求体（高级）",
+            "description": "额外请求体（高级，会覆盖上方专用字段）",
             "items": {},
             "default": {}
           }
