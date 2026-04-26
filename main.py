@@ -164,17 +164,16 @@ class GiteeAIImagePlugin(Star):
 
     def _inject_provider_list_to_tool_doc(self):
         labels = self.registry.provider_labels()
-        all_ids = self.registry.provider_ids()
-        if not all_ids:
+        if not labels:
             return
         entries = []
-        for pid in all_ids:
-            lbl = labels.get(pid, "")
-            if lbl:
-                entries.append(f"- {lbl}（ID: {pid}）")
-            else:
-                entries.append(f"- {pid}")
-        provider_block = "\n可用后端列表（backend 参数可选值）：\n" + "\n".join(entries)
+        for pid, lbl in labels.items():
+            entries.append(f"- {lbl}")
+        provider_block = (
+            "\n可用后端列表（backend 参数可选值，填显示名称即可）：\n"
+            + "\n".join(entries)
+            + "\n注意：除非用户明确要求使用特定后端（如提到后端名称），否则永远填 auto。"
+        )
         for method in (self.aiimg_generate, self.aiimg_draw, self.aiimg_edit, self.aiimg_video):
             if method.__doc__:
                 method.__doc__ += provider_block
