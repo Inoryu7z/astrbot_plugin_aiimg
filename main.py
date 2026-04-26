@@ -1632,7 +1632,7 @@ class GiteeAIImagePlugin(Star):
             f"{description}"
             f"{strength_hint}\n\n"
             f"请根据以上描述构建自拍提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
-            f"该参考图会自动作为额外参考图传入，你无需在提示词中指定图片序号。"
+            f"这张参考图的序号为4，会自动作为额外参考图传入，请在提示词中使用序号4来引用该参考图。"
         )
         return self._build_llm_tool_text_desc_result(result_text)
 
