@@ -175,8 +175,9 @@ class GiteeAIImagePlugin(Star):
             + "\n注意：除非用户明确要求使用特定后端（如提到后端名称），否则永远填 auto。"
         )
         for method in (self.aiimg_generate, self.aiimg_draw, self.aiimg_edit, self.aiimg_video):
-            if method.__doc__:
-                method.__doc__ += provider_block
+            fn = method.__func__
+            if fn.__doc__:
+                fn.__doc__ += provider_block
 
     def _migrate_legacy_data(self):
         import shutil as _shutil
