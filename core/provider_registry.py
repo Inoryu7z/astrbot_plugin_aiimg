@@ -253,6 +253,25 @@ class ProviderRegistry:
     def provider_ids(self) -> list[str]:
         return list(self._providers.keys())
 
+    def provider_labels(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for pid, conf in self._providers.items():
+            lbl = str(conf.get("label") or "").strip()
+            if lbl:
+                out[pid] = lbl
+        return out
+
+    def resolve_backend(self, raw: str) -> str | None:
+        raw = (raw or "").strip()
+        if not raw or raw.lower() == "auto":
+            return None
+        if raw in self._providers:
+            return raw
+        for pid, label in self.provider_labels().items():
+            if label == raw:
+                return pid
+        return None
+
     def get(self, provider_id: str) -> dict | None:
         return self._providers.get(str(provider_id or "").strip())
 

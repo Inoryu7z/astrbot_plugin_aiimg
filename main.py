@@ -160,6 +160,25 @@ class GiteeAIImagePlugin(Star):
             f"视频预设={len(self._get_video_presets())}个"
         )
 
+        self._inject_provider_list_to_tool_doc()
+
+    def _inject_provider_list_to_tool_doc(self):
+        labels = self.registry.provider_labels()
+        all_ids = self.registry.provider_ids()
+        if not all_ids:
+            return
+        entries = []
+        for pid in all_ids:
+            lbl = labels.get(pid, "")
+            if lbl:
+                entries.append(f"- {lbl}（ID: {pid}）")
+            else:
+                entries.append(f"- {pid}")
+        provider_block = "\n可用后端列表（backend 参数可选值）：\n" + "\n".join(entries)
+        for method in (self.aiimg_generate, self.aiimg_draw, self.aiimg_edit, self.aiimg_video):
+            if method.__doc__:
+                method.__doc__ += provider_block
+
     def _migrate_legacy_data(self):
         import shutil as _shutil
         legacy = self._legacy_data_dir
@@ -1279,7 +1298,7 @@ class GiteeAIImagePlugin(Star):
         Args:
             prompt(string): 图片编辑提示词
             use_message_images(boolean): 是否自动获取用户消息中的图片（目前仅支持 true）
-            backend(string): auto=自动选择；也可填 provider_id（你在 WebUI providers 里配置的 id）
+            backend(string): auto=自动选择。可选值见下方列表，填显示名称或服务商ID均可。除非用户明确要求使用特定后端，否则永远填auto。
         """
         if not use_message_images:
             await self._signal_llm_tool_failure(event)
@@ -1310,7 +1329,7 @@ class GiteeAIImagePlugin(Star):
         Args:
             prompt(string): 提示词，必须参考skill构建
             mode(string): auto=自动判断, text=文生图, edit=改图, selfie_ref=自拍
-            backend(string): auto=自动选择
+            backend(string): auto=自动选择。可选值见下方列表，填显示名称或服务商ID均可。除非用户明确要求使用特定后端，否则永远填auto。
             output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
         """
         prompt = (prompt or "").strip()
@@ -1338,17 +1357,12 @@ class GiteeAIImagePlugin(Star):
             return self._build_llm_tool_failure_result("当前有图片正在生成中，请稍后再试")
 
         b_raw = (backend or "auto").strip()
-        known_provider_ids = set(self.registry.provider_ids())
-        if not b_raw or b_raw.lower() == "auto":
-            target_backend = None
-        elif b_raw in known_provider_ids:
-            target_backend = b_raw
-        else:
+        target_backend = self.registry.resolve_backend(b_raw)
+        if b_raw and b_raw.lower() != "auto" and target_backend is None:
             logger.warning(
                 "[aiimg_generate] 忽略未知 backend 覆盖，回退自动链路: backend=%s",
                 b_raw,
             )
-            target_backend = None
 
         output = (output or "").strip()
         size = output if output and "x" in output else None
