@@ -135,11 +135,10 @@ class EditRouter:
         if backend:
             logger.debug("[edit] backend override active, chain fallback disabled")
 
-        effective_default_output = (
-            str(default_output).strip()
-            if default_output is not None and str(default_output).strip()
-            else self._default_output()
-        )
+        if default_output is not None:
+            effective_default_output = str(default_output).strip()
+        else:
+            effective_default_output = self._default_output()
         gitee_default_task_types = self._default_gitee_task_types()
         final_task_types = (
             list(task_types) if list(task_types) else gitee_default_task_types

@@ -2682,6 +2682,7 @@ class GiteeAIImagePlugin(Star):
             backend=backend,
             size=size,
             resolution=resolution,
+            default_output="",
             chain_override=chain_override,
         )
 
