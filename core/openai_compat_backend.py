@@ -488,10 +488,7 @@ class OpenAICompatBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        edit_default = self.default_edit_size or self.default_size
-        final_size, raw_size, fallback_used = self._resolve_size(
-            size, resolution, fallback_default=edit_default
-        )
+        final_size, raw_size, fallback_used = self._resolve_size(size, resolution)
         if fallback_used:
             logger.warning(
                 "[OpenAICompat][generate] 不支持的 size='%s'，已兜底为 '%s'",
@@ -579,7 +576,10 @@ class OpenAICompatBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size, raw_size, fallback_used = self._resolve_size(size, resolution)
+        edit_default = self.default_edit_size or self.default_size
+        final_size, raw_size, fallback_used = self._resolve_size(
+            size, resolution, fallback_default=edit_default
+        )
         if fallback_used:
             logger.warning(
                 "[OpenAICompat][edit] 不支持的 size='%s'，已兜底为 '%s'",
