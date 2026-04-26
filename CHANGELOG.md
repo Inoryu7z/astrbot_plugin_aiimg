@@ -9,6 +9,8 @@
 **🐛 Bug 修复**
 
 * 修复自拍路径在人格 `default_output` 留空时仍被 `features.edit.default_output`（默认 4K）覆盖，导致 gpt-image-2 报尺寸超限错误的问题
+* 修复 `default_edit_size` 填写比例格式（如 `9:16`）时未自动转换为像素尺寸，导致 API 报错或输出 1:1 的问题
+* 修复 `OpenAICompatBackend.edit()` 多图输入时拼图为单图降级，改为利用 SDK 原生多图数组传递（gpt-image-2 支持最多 16 张参考图）
 
 **🔧 优化**
 

@@ -12,7 +12,13 @@ from openai.types.images_response import ImagesResponse
 
 from astrbot.api import logger
 
-from .gitee_sizes import normalize_size_text, ratio_defaults_from_sizes, size_to_ratio
+from .gitee_sizes import (
+    GITEE_SUPPORTED_RATIOS,
+    normalize_size_text,
+    ratio_defaults_from_sizes,
+    resolve_ratio_size,
+    size_to_ratio,
+)
 from .image_format import guess_image_mime_and_ext
 
 
@@ -320,6 +326,17 @@ class OpenAICompatBackend:
         if not raw:
             raw = fallback_default or self.default_size
 
+        if not _looks_like_size(raw):
+            ratio_size, warning = resolve_ratio_size(raw, supported_ratios=GITEE_SUPPORTED_RATIOS)
+            if ratio_size:
+                logger.debug(
+                    "[OpenAICompat] ratio '%s' resolved to size '%s'%s",
+                    raw,
+                    ratio_size,
+                    f" ({warning})" if warning else "",
+                )
+                raw = ratio_size
+
         if not self.allowed_sizes:
             return raw, raw, False
 
@@ -570,15 +587,22 @@ class OpenAICompatBackend:
                 final_size,
             )
 
-        # Some providers only accept a single input image for edits.
-        packed = _build_collage(images) if len(images) > 1 else images[0]
-        mime, ext = guess_image_mime_and_ext(packed)
-        upload = _bytes_to_upload_file(packed, f"input.{ext}")
+        if len(images) > 1:
+            uploads = []
+            for idx, img in enumerate(images):
+                mime, ext = guess_image_mime_and_ext(img)
+                upload = _bytes_to_upload_file(img, f"input_{idx}.{ext}")
+                uploads.append(upload)
+            image_param = uploads
+        else:
+            mime, ext = guess_image_mime_and_ext(images[0])
+            upload = _bytes_to_upload_file(images[0], f"input.{ext}")
+            image_param = upload
 
         kwargs: dict = {
             "model": final_model,
             "prompt": prompt,
-            "image": upload,
+            "image": image_param,
             "size": final_size,
         }
         eb = {}
