@@ -11,9 +11,12 @@
 * 修复自拍路径在人格 `default_output` 留空时仍被 `features.edit.default_output`（默认 4K）覆盖，导致 gpt-image-2 报尺寸超限错误的问题
 * 修复 `default_edit_size` 填写比例格式（如 `9:16`）时未自动转换为像素尺寸，导致 API 报错或输出 1:1 的问题
 * 修复 `OpenAICompatBackend.edit()` 多图输入时拼图为单图降级，改为利用 SDK 原生多图数组传递（gpt-image-2 支持最多 16 张参考图）
+* 修复 `edit()` 未使用 `default_edit_size`、`generate()` 误用 `edit_default`，导致配置了 `1152x2048` 但输出 1:1 的 bug
 
 **🔧 优化**
 
+* LLM 工具 `backend` 参数支持按显示名称（label）匹配，如配置 label 为"好相机"，Bot 传 `backend=好相机` 即可
+* LLM 工具描述动态注入可用后端列表，Bot 可根据用户意图选择后端
 * `default_size` 默认值从 `4096x4096` 调整为 `1024x1024`，更适合 gpt-image-2 等新模型
 * OpenAI Images 模板描述更新，提示 gpt-image-2 专用字段用法
 * 比例默认尺寸调整：9:16 默认 `1152x2048`、16:9 默认 `2048x1152`、1:1 默认 `1024x1024`，确保满足 gpt-image-2 最低像素要求（655,360）
