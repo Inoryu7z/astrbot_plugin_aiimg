@@ -743,7 +743,7 @@
           "default_edit_size": {
             "type": "string",
             "description": "图生图/自拍默认输出尺寸（留空则复用文生图默认尺寸）",
-            "hint": "如 1024x1792（约 9:16）。gpt-image-2 要求同上。",
+            "hint": "如 1152x2048（9:16）。gpt-image-2 要求同上。",
             "default": ""
           },
           "quality": {
