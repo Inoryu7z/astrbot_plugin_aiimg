@@ -1,3 +1,18 @@
+### v1.2.3
+
+**✨ 新功能**
+
+* OpenAI Images 模板新增 gpt-image-2 专用配置字段：`quality`、`output_format`、`output_compression`、`moderation`，留空不传
+* 新增 `default_edit_size` 字段，支持图生图/自拍使用与文生图不同的默认尺寸（如 1024x1792 即约 9:16）
+* `/自拍` 命令支持比例参数，用法：`/自拍 提示词 9:16`，支持 1:1/4:3/3:4/3:2/2:3/16:9/9:16
+
+**🔧 优化**
+
+* `default_size` 默认值从 `4096x4096` 调整为 `1024x1024`，更适合 gpt-image-2 等新模型
+* OpenAI Images 模板描述更新，提示 gpt-image-2 专用字段用法
+
+---
+
 ### v1.2.2
 
 **🐛 Bug 修复**

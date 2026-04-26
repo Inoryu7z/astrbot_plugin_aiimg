@@ -333,6 +333,20 @@ class ProviderRegistry:
             )
 
         if template_key in {"openai_images", "gemini_openai_images"}:
+            merged_extra: dict[str, Any] = {}
+            merged_extra.update(_as_dict(conf.get("extra_body")))
+            quality = str(conf.get("quality") or "").strip()
+            if quality:
+                merged_extra["quality"] = quality
+            output_format = str(conf.get("output_format") or "").strip()
+            if output_format:
+                merged_extra["output_format"] = output_format
+            output_compression = conf.get("output_compression")
+            if isinstance(output_compression, (int, float)) and int(output_compression) > 0:
+                merged_extra["output_compression"] = int(output_compression)
+            moderation = str(conf.get("moderation") or "").strip()
+            if moderation:
+                merged_extra["moderation"] = moderation
             return OpenAICompatBackend(
                 imgr=self._imgr,
                 base_url=str(conf.get("base_url") or "").strip(),
@@ -344,9 +358,10 @@ class ProviderRegistry:
                 timeout=int(conf.get("timeout") or 120),
                 max_retries=int(conf.get("max_retries") or 2),
                 default_model=str(conf.get("model") or "").strip(),
-                default_size=str(conf.get("default_size") or "4096x4096").strip(),
+                default_size=str(conf.get("default_size") or "1024x1024").strip(),
+                default_edit_size=str(conf.get("default_edit_size") or "").strip() or None,
                 supports_edit=bool(conf.get("supports_edit", True)),
-                extra_body=_as_dict(conf.get("extra_body")) or None,
+                extra_body=merged_extra or None,
                 proxy_url=str(conf.get("proxy_url") or "").strip() or None,
             )
 
