@@ -174,10 +174,12 @@ class GiteeAIImagePlugin(Star):
             + "\n".join(entries)
             + "\n注意：除非用户明确要求使用特定后端（如提到后端名称），否则永远填 auto。"
         )
-        for method in (self.aiimg_generate, self.aiimg_draw, self.aiimg_edit, self.aiimg_video):
-            fn = method.__func__
-            if fn.__doc__:
-                fn.__doc__ += provider_block
+        from astrbot.core.provider.register import llm_tools
+        tool_names = ("aiimg_generate", "aiimg_draw", "aiimg_edit", "aiimg_video")
+        for name in tool_names:
+            func_tool = llm_tools.get_func(name)
+            if func_tool and func_tool.description:
+                func_tool.description += provider_block
 
     def _migrate_legacy_data(self):
         import shutil as _shutil
