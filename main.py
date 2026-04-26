@@ -664,10 +664,10 @@ class GiteeAIImagePlugin(Star):
                 await asyncio.gather(*tasks, return_exceptions=True)
         except Exception:
             pass
+        if hasattr(self, "daily_selfie") and self.daily_selfie:
+            await self.daily_selfie.stop()
         await self.imgr.close()
         await self.draw.close()
-        if hasattr(self.edit, 'registry'):
-            self.edit.registry = None
         await self.nb.close()
         await close_session()  # 关闭 utils.py 的 HTTP 会话
 
@@ -2770,6 +2770,15 @@ class GiteeAIImagePlugin(Star):
             final_prompt,
             [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
         )
+
+        if self.edit is None:
+            logger.error("[daily_selfie] self.edit is None! 插件可能已被重载")
+            return None
+        if self.edit.registry is None:
+            logger.error("[daily_selfie] self.edit.registry is None! 插件可能已被 terminate")
+            return None
+        available = self.edit.get_available_backends()
+        logger.info("[daily_selfie] edit可用后端: %s", available)
 
         return await self.edit.edit(
             prompt=final_prompt,
