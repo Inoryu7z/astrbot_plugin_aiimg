@@ -1,3 +1,13 @@
+### v1.2.2
+
+**🐛 Bug 修复**
+
+* 修复 `terminate()` 中未取消 `DailySelfieService` 后台任务，导致插件重载后旧任务引用已销毁的 registry 而崩溃的问题
+* 移除 `terminate()` 中 `self.edit.registry = None`，避免正在运行的生图任务因 registry 被置空而失败
+* 补画生图前新增 `self.edit` 和 `self.edit.registry` 状态检查，如果为 None 则安全返回而非崩溃
+
+---
+
 ### v1.2.1
 
 **✨ 新功能**
