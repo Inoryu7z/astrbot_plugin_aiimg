@@ -244,7 +244,7 @@ class DailySelfieService:
             })
         return personas
 
-    async def run_daily_selfie(self, umo: str = ""):
+    async def run_daily_selfie(self):
         if self._selfie_task and not self._selfie_task.done():
             logger.warning("[DailySelfie] 补画任务正在运行中，跳过本次触发")
             return
@@ -259,9 +259,9 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
             return
 
-        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe, umo))
+        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe))
 
-    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
+    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any):
         total_success = 0
         total_fail = 0
         request_interval = 5
@@ -284,7 +284,7 @@ class DailySelfieService:
                     continue
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, remaining, request_interval, umo
+                    p, wardrobe, style_pool, recent_styles, remaining, request_interval
                 )
                 total_success += s
                 total_fail += f
@@ -344,7 +344,6 @@ class DailySelfieService:
         recent_styles: list[str],
         remaining: int,
         request_interval: int,
-        umo: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
         provider_id = persona["provider_id"]
@@ -410,6 +409,8 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
             return 0, 0
 
+        tasks: list[asyncio.Task] = []
+
         for prompt, ref in all_prompts:
             cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
             if cur_remaining <= 0:
@@ -427,31 +428,54 @@ class DailySelfieService:
                 fail += 1
                 continue
 
-            try:
-                image_path = await self.plugin._generate_daily_selfie_image(
-                    persona_name=persona_name,
-                    prompt=prompt,
-                    ref_image_path=ref_image_path,
-                    ref_strength=ref_strength,
-                    persona_conf=persona["config"],
+            t = asyncio.create_task(
+                self._generate_one_selfie(
+                    persona_name, prompt, ref_image_path, ref_strength, persona,
                 )
-                if image_path:
-                    success += 1
-                    await self.counter.increment(provider_id)
-                    logger.info("[DailySelfie] 人格 %s 补画成功 (%d/%d)", persona_name, success, remaining)
-                    await self._save_to_wardrobe(image_path, persona_name)
-                    if umo:
-                        await self._send_image_to_user(umo, image_path, persona_name)
-                else:
-                    fail += 1
-                    logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
-            except Exception as e:
-                fail += 1
-                logger.error("[DailySelfie] 人格 %s 生图失败: %s", persona_name, e)
-
+            )
+            tasks.append(t)
             await asyncio.sleep(request_interval)
 
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                fail += 1
+                logger.error("[DailySelfie] 人格 %s 生图异常: %s", persona_name, r)
+            elif r is True:
+                success += 1
+            else:
+                fail += 1
+
         return success, fail
+
+    async def _generate_one_selfie(
+        self,
+        persona_name: str,
+        prompt: str,
+        ref_image_path: str,
+        ref_strength: str,
+        persona: dict,
+    ) -> bool:
+        provider_id = persona["provider_id"]
+        try:
+            image_path = await self.plugin._generate_daily_selfie_image(
+                persona_name=persona_name,
+                prompt=prompt,
+                ref_image_path=ref_image_path,
+                ref_strength=ref_strength,
+                persona_conf=persona["config"],
+            )
+            if image_path:
+                await self.counter.increment(provider_id)
+                logger.info("[DailySelfie] 人格 %s 补画成功", persona_name)
+                await self._save_to_wardrobe(image_path, persona_name)
+                return True
+            else:
+                logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
+                return False
+        except Exception as e:
+            logger.error("[DailySelfie] 人格 %s 生图失败: %s", persona_name, e)
+            return False
 
     def _is_debug(self) -> bool:
         selfie_conf = self.plugin._get_feature("selfie")
@@ -476,35 +500,6 @@ class DailySelfieService:
                 logger.info("[DailySelfie] 补画图片已保存到衣橱: %s", image_id)
         except Exception as e:
             logger.debug("[DailySelfie] 补画图片保存到衣橱失败: %s", e)
-
-    async def _send_image_to_user(self, umo: str, image_path: Path, persona_name: str) -> None:
-        try:
-            from astrbot.api.event import MessageChain
-            from astrbot.api.message_components import Image as ImageComponent
-
-            p = Path(image_path)
-            if not p.exists():
-                logger.warning("[DailySelfie] 发送图片失败：文件不存在 %s", p)
-                return
-
-            size_bytes = int(p.stat().st_size)
-            chain = MessageChain()
-
-            if size_bytes > 10 * 1024 * 1024:
-                import aiofiles
-                async with aiofiles.open(p, "rb") as f:
-                    image_bytes = await f.read()
-                chain.chain.append(ImageComponent.fromBytes(image_bytes))
-            else:
-                chain.file_image(str(p))
-
-            ok = await self.plugin.context.send_message(umo, chain)
-            if ok:
-                logger.info("[DailySelfie] 图片已发送给用户: %s (%s)", p.name, persona_name)
-            else:
-                logger.warning("[DailySelfie] 图片发送失败（平台未匹配）: %s", p.name)
-        except Exception as e:
-            logger.warning("[DailySelfie] 图片发送异常: %s", e)
 
     async def _llm_round1(
         self,

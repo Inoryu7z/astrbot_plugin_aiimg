@@ -1,3 +1,16 @@
+### v1.2.4
+
+**🐛 Bug 修复**
+
+* 修复 `_generate_daily_selfie_image` 调用 `edit.edit()` 时未传 `default_output=""`，导致补画时 `features.edit.default_output`（默认4K）覆盖后端 `default_edit_size` 的问题
+
+**🔧 优化**
+
+* 补画画图从串行改为并发：每隔5秒发一个请求，不等前一张画完，用 `asyncio.gather` 收集结果
+* 取消补画发送图片给用户的功能，补画结果仅静默存入衣橱
+
+---
+
 ### v1.2.3
 
 **✨ 新功能**
