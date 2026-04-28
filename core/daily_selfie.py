@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-logger = logging.getLogger("astrbot_plugin_aiimg.daily_selfie")
+from astrbot.api import logger
 
 _DATE_FMT = "%Y-%m-%d"
 
@@ -244,7 +243,7 @@ class DailySelfieService:
             })
         return personas
 
-    async def run_daily_selfie(self, umo: str = ""):
+    async def run_daily_selfie(self, persona_name: str = ""):
         if self._selfie_task and not self._selfie_task.done():
             logger.warning("[DailySelfie] 补画任务正在运行中，跳过本次触发")
             return
@@ -254,14 +253,20 @@ class DailySelfieService:
             logger.info("[DailySelfie] 没有启用补画的人格，跳过")
             return
 
+        if persona_name:
+            personas = [p for p in personas if p["persona_name"] == persona_name]
+            if not personas:
+                logger.info("[DailySelfie] 人格 %s 未启用补画，跳过", persona_name)
+                return
+
         wardrobe = self.plugin._get_wardrobe_instance()
         if not wardrobe:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
             return
 
-        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe, umo))
+        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe))
 
-    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
+    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any):
         total_success = 0
         total_fail = 0
         request_interval = 5
@@ -284,7 +289,7 @@ class DailySelfieService:
                     continue
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, remaining, request_interval, umo
+                    p, wardrobe, style_pool, recent_styles, remaining, request_interval
                 )
                 total_success += s
                 total_fail += f
@@ -344,7 +349,6 @@ class DailySelfieService:
         recent_styles: list[str],
         remaining: int,
         request_interval: int,
-        umo: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
         provider_id = persona["provider_id"]
@@ -367,10 +371,14 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s LLM第1轮未返回查询", persona_name)
             return 0, 0
 
+        logger.info("[DailySelfie] 人格 %s LLM第1轮返回 %d 条查询", persona_name, len(queries))
+
         ref_results = await self._search_reference_images(queries, wardrobe, persona_name)
         if not ref_results:
             logger.warning("[DailySelfie] 人格 %s 未找到参考图", persona_name)
             return 0, 0
+
+        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图", persona_name, len(ref_results))
 
         batch_size = 5
         all_prompts: list[tuple[str, dict]] = []
@@ -402,6 +410,7 @@ class DailySelfieService:
                 batch_num=batch_num, total_batch=total_batches,
                 style_summary=style_summary,
             )
+            logger.info("[DailySelfie] 人格 %s LLM第2轮 batch %d/%d 返回 %d 条提示词", persona_name, batch_num, total_batches, len(prompts))
             for i, prompt in enumerate(prompts):
                 if i < len(valid_refs):
                     all_prompts.append((prompt.strip(), valid_refs[i]))
@@ -409,6 +418,10 @@ class DailySelfieService:
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
             return 0, 0
+
+        logger.info("[DailySelfie] 人格 %s 生成 %d 条提示词，开始并发画图", persona_name, len(all_prompts))
+
+        tasks: list[asyncio.Task] = []
 
         for prompt, ref in all_prompts:
             cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
@@ -424,34 +437,69 @@ class DailySelfieService:
             ref_strength = ref.get("ref_strength", "style")
 
             if not ref_image_path:
+                logger.warning("[DailySelfie] 人格 %s 提示词 %d ref_image_path 为空，跳过", persona_name, len(tasks))
                 fail += 1
                 continue
 
-            try:
-                image_path = await self.plugin._generate_daily_selfie_image(
+            logger.info("[DailySelfie] 人格 %s 创建画图任务 %d: ref=%s strength=%s", persona_name, len(tasks), ref_image_path[:50], ref_strength)
+
+            t = asyncio.create_task(
+                self._generate_one_selfie(
+                    persona_name, prompt, ref_image_path, ref_strength, persona,
+                )
+            )
+            tasks.append(t)
+            await asyncio.sleep(request_interval)
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("[DailySelfie] 人格 %s 并发画图完成: tasks=%d results=%d", persona_name, len(tasks), len(results))
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                fail += 1
+                logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
+            elif r is True:
+                success += 1
+            else:
+                fail += 1
+                logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 False", persona_name, i)
+
+        return success, fail
+
+    async def _generate_one_selfie(
+        self,
+        persona_name: str,
+        prompt: str,
+        ref_image_path: str,
+        ref_strength: str,
+        persona: dict,
+    ) -> bool:
+        provider_id = persona["provider_id"]
+        logger.info("[DailySelfie] 人格 %s 开始画图: ref=%s prompt_len=%d", persona_name, ref_image_path[:50] if ref_image_path else "空", len(prompt))
+        try:
+            image_path = await asyncio.wait_for(
+                self.plugin._generate_daily_selfie_image(
                     persona_name=persona_name,
                     prompt=prompt,
                     ref_image_path=ref_image_path,
                     ref_strength=ref_strength,
                     persona_conf=persona["config"],
-                )
-                if image_path:
-                    success += 1
-                    await self.counter.increment(provider_id)
-                    logger.info("[DailySelfie] 人格 %s 补画成功 (%d/%d)", persona_name, success, remaining)
-                    await self._save_to_wardrobe(image_path, persona_name)
-                    if umo:
-                        await self._send_image_to_user(umo, image_path, persona_name)
-                else:
-                    fail += 1
-                    logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
-            except Exception as e:
-                fail += 1
-                logger.error("[DailySelfie] 人格 %s 生图失败: %s", persona_name, e)
-
-            await asyncio.sleep(request_interval)
-
-        return success, fail
+                ),
+                timeout=300,
+            )
+            if image_path:
+                await self.counter.increment(provider_id)
+                logger.info("[DailySelfie] 人格 %s 补画成功: %s", persona_name, image_path)
+                await self._save_to_wardrobe(image_path, persona_name)
+                return True
+            else:
+                logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
+                return False
+        except asyncio.TimeoutError:
+            logger.error("[DailySelfie] 人格 %s 画图超时(300s)", persona_name)
+            return False
+        except Exception as e:
+            logger.error("[DailySelfie] 人格 %s 生图失败: %s", persona_name, e, exc_info=True)
+            return False
 
     def _is_debug(self) -> bool:
         selfie_conf = self.plugin._get_feature("selfie")
@@ -476,35 +524,6 @@ class DailySelfieService:
                 logger.info("[DailySelfie] 补画图片已保存到衣橱: %s", image_id)
         except Exception as e:
             logger.debug("[DailySelfie] 补画图片保存到衣橱失败: %s", e)
-
-    async def _send_image_to_user(self, umo: str, image_path: Path, persona_name: str) -> None:
-        try:
-            from astrbot.api.event import MessageChain
-            from astrbot.api.message_components import Image as ImageComponent
-
-            p = Path(image_path)
-            if not p.exists():
-                logger.warning("[DailySelfie] 发送图片失败：文件不存在 %s", p)
-                return
-
-            size_bytes = int(p.stat().st_size)
-            chain = MessageChain()
-
-            if size_bytes > 10 * 1024 * 1024:
-                import aiofiles
-                async with aiofiles.open(p, "rb") as f:
-                    image_bytes = await f.read()
-                chain.chain.append(ImageComponent.fromBytes(image_bytes))
-            else:
-                chain.file_image(str(p))
-
-            ok = await self.plugin.context.send_message(umo, chain)
-            if ok:
-                logger.info("[DailySelfie] 图片已发送给用户: %s (%s)", p.name, persona_name)
-            else:
-                logger.warning("[DailySelfie] 图片发送失败（平台未匹配）: %s", p.name)
-        except Exception as e:
-            logger.warning("[DailySelfie] 图片发送异常: %s", e)
 
     async def _llm_round1(
         self,
@@ -534,13 +553,23 @@ class DailySelfieService:
             )
 
         try:
-            resp = await self.plugin.context.llm_generate(
-                chat_provider_id=chat_provider_id,
-                prompt=user_prompt,
-                system_prompt=system_prompt,
+            resp = await asyncio.wait_for(
+                self.plugin.context.llm_generate(
+                    chat_provider_id=chat_provider_id,
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                ),
+                timeout=120,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
+                tool_names = getattr(resp, "tools_call_name", None) or []
+                logger.warning(
+                    "[DailySelfie] LLM第1轮返回空文本 role=%s tool_calls=%s result_chain=%s",
+                    getattr(resp, "role", "?"),
+                    tool_names,
+                    bool(getattr(resp, "result_chain", None)),
+                )
                 return []
 
             if self._is_debug():
@@ -550,6 +579,9 @@ class DailySelfieService:
                 )
 
             return _parse_llm_lines(text, remaining)
+        except asyncio.TimeoutError:
+            logger.error("[DailySelfie] LLM第1轮调用超时(120s)")
+            return []
         except Exception as e:
             logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
             return []
@@ -590,14 +622,55 @@ class DailySelfieService:
             )
 
         try:
-            resp = await self.plugin.context.llm_generate(
-                chat_provider_id=chat_provider_id,
-                prompt=user_prompt,
-                system_prompt=system_prompt,
+            resp = await asyncio.wait_for(
+                self.plugin.context.llm_generate(
+                    chat_provider_id=chat_provider_id,
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                ),
+                timeout=120,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
+
+            tool_names = getattr(resp, "tools_call_name", None) or []
+            if tool_names:
+                logger.warning(
+                    "[DailySelfie] LLM第2轮返回了工具调用而非文本(已忽略): %s batch=%d/%d",
+                    tool_names, batch_num, total_batch,
+                )
+
             if not text:
-                return []
+                logger.warning(
+                    "[DailySelfie] LLM第2轮返回空文本，尝试降级重试 batch=%d/%d\n"
+                    "  resp.role=%s tool_calls=%s result_chain=%s",
+                    batch_num, total_batch,
+                    getattr(resp, "role", "?"),
+                    tool_names,
+                    bool(getattr(resp, "result_chain", None)),
+                )
+                fallback_system = (
+                    f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}"
+                    if persona_system_prompt
+                    else _TASK_MODE_SYSTEM_PROMPT
+                )
+                try:
+                    resp2 = await asyncio.wait_for(
+                        self.plugin.context.llm_generate(
+                            chat_provider_id=chat_provider_id,
+                            prompt=user_prompt,
+                            system_prompt=fallback_system,
+                        ),
+                        timeout=120,
+                    )
+                    text = (getattr(resp2, "completion_text", "") or "").strip()
+                    if text:
+                        logger.info("[DailySelfie] LLM第2轮降级重试成功 batch=%d/%d text_len=%d", batch_num, total_batch, len(text))
+                    else:
+                        logger.error("[DailySelfie] LLM第2轮降级重试仍返回空文本 batch=%d/%d", batch_num, total_batch)
+                        return []
+                except Exception as e2:
+                    logger.error("[DailySelfie] LLM第2轮降级重试失败: %s", e2)
+                    return []
 
             if self._is_debug():
                 logger.info(
@@ -606,6 +679,9 @@ class DailySelfieService:
                 )
 
             return _parse_llm_lines(text, count)
+        except asyncio.TimeoutError:
+            logger.error("[DailySelfie] LLM第2轮调用超时(120s) batch=%d/%d", batch_num, total_batch)
+            return []
         except Exception as e:
             logger.error("[DailySelfie] LLM第2轮调用失败: %s", e)
             return []

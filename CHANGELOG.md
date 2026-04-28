@@ -1,3 +1,36 @@
+### v1.2.9
+
+**🐛 Bug 修复**
+
+* 修复 `_process_persona_selfie` 中 `total_batch` 变量名拼写错误（应为 `total_batches`），导致 Round2 成功返回提示词后抛出 `NameError` 异常，补画流程中断
+
+---
+
+### v1.2.8
+
+**🐛 Bug 修复**
+
+* 修复 `daily_selfie.py` 使用标准库 `logging.getLogger()` 导致日志在 Docker 环境不可见的问题，改用 `from astrbot.api import logger`（loguru）
+* 修复补画流程第二轮 LLM 返回空文本时静默失败，导致搜图成功但无法生成提示词和图片的问题
+* 第二轮 LLM 空响应时增加降级重试：去掉 `_SKILL_RULES_SYSTEM_PROMPT`（可能触发内容安全过滤）后重新调用
+* 增加 tool_call 检测：当 LLM 误返回工具调用而非文本时记录警告日志
+* 第一轮 LLM 空响应时增加诊断日志（role、tool_calls、result_chain 状态）
+
+---
+
+### v1.2.5
+
+**🐛 Bug 修复**
+
+* 修复 `_generate_daily_selfie_image` 调用 `edit.edit()` 时未传 `default_output=""`，导致补画时 `features.edit.default_output`（默认4K）覆盖后端 `default_edit_size` 的问题
+
+**🔧 优化**
+
+* 补画画图从串行改为并发：每隔5秒发一个请求，不等前一张画完，用 `asyncio.gather` 收集结果
+* 取消补画发送图片给用户的功能，补画结果仅静默存入衣橱
+
+---
+
 ### v1.2.3
 
 **✨ 新功能**
