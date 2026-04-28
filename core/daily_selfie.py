@@ -143,6 +143,26 @@ _SKILL_RULES_SYSTEM_PROMPT = (
     "- 优先使用服装状态变化或动作间接营造性感效果，而非直接描述敏感身体部位"
 )
 
+
+def _build_strength_hint(ref_strength: str) -> str:
+    if ref_strength == "full":
+        return (
+            "用户认为这张图片的效果很棒，所以，请在提示词中完整保留描述里的全部视觉细节，"
+            "包括姿势动作、构图与服装，除非用户现在的意图是想要替换部分细节，否则不得省略或替换。"
+        )
+    elif ref_strength == "reimagine":
+        return (
+            "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
+            "请仅提取描述中的服装款式信息，完全重新设计姿势与构图。"
+        )
+    else:
+        return (
+            "用户认可这张图片的服装风格与整体氛围，但希望姿势或构图有所变化。"
+            "请在保留服装与整体氛围的基础上，对姿势或构图做出明确的小变动"
+            "（如调整角度、改变肢体位置、偏移构图重心等），不能原样照搬。"
+        )
+
+
 _ROUND1_USER_PROMPT = (
     "你在整理衣橱时发现，今天还有 {remaining} 次拍照额度没用完。\n\n"
     "衣橱中可选的风格：\n{style_pool}\n\n"
@@ -399,19 +419,19 @@ class DailySelfieService:
 
         descriptions = []
         valid_refs = []
+        ref_index = 0
         for i, query in enumerate(queries):
             ref = ref_by_query.get(i)
             if ref:
                 desc = ref.get("description", "")
                 if desc:
+                    ref_index += 1
                     strength = ref.get("ref_strength", "style") or "style"
-                    if strength == "full":
-                        guide = "请完整保留这张参考图的全部视觉细节，包括姿势动作、构图与服装"
-                    elif strength == "reimagine":
-                        guide = "请仅提取这张参考图的服装款式信息，完全重新设计姿势与构图"
-                    else:
-                        guide = "请保留这张参考图的服装与整体氛围，对姿势或构图做出明确的小变动"
-                    descriptions.append(f"{desc}\n指引：{guide}")
+                    hint = _build_strength_hint(strength)
+                    descriptions.append(
+                        f"参考图{ref_index}描述：{desc}\n\n{hint}\n\n"
+                        f"这张参考图的序号为{ref_index}，请在提示词中使用序号{ref_index}来引用该参考图。"
+                    )
                     valid_refs.append(ref)
                 else:
                     descriptions.append(f"（无参考图）拍摄方案：{query}\n指引：请根据拍摄方案自行发挥，构建完整的提示词，确保面部完整露出")
