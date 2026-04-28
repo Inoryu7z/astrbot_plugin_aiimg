@@ -1026,8 +1026,9 @@ class GiteeAIImagePlugin(Star):
         if not hasattr(self, "daily_selfie") or not self.daily_selfie:
             yield event.plain_result("补画功能未启用。请先在配置中开启人格的每日补画。")
             return
-        yield event.plain_result("⏳ 补画任务已启动，生成的图片会自动发给你...")
-        await self.daily_selfie.run_daily_selfie(event.unified_msg_origin)
+        yield event.plain_result("⏳ 补画任务已启动...")
+        persona_name = await self._get_current_persona_name(event)
+        await self.daily_selfie.run_daily_selfie(persona_name=persona_name or "")
 
     @filter.command("补画状态")
     async def daily_selfie_status_command(self, event: AstrMessageEvent):
@@ -2811,6 +2812,7 @@ class GiteeAIImagePlugin(Star):
             images=ref_images,
             size=size,
             resolution=None,
+            default_output="",
             chain_override=chain_override,
         )
 
