@@ -1620,18 +1620,12 @@ class GiteeAIImagePlugin(Star):
         ref_persona = ref.get("persona", "") or "未知"
         ref_strength = ref.get("ref_strength", "style") or "style"
 
-        strength_hint = ""
-        if ref_strength == "full":
-            strength_hint = "\n\n用户认为这张图片的效果很棒，所以，请在提示词中完整保留描述里的全部视觉细节，包括姿势动作、构图与服装，除非用户现在的意图是想要替换部分细节，否则不得省略或替换。"
-        elif ref_strength == "reimagine":
-            strength_hint = "\n\n用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。请仅提取描述中的服装款式信息，完全重新设计姿势与构图。"
-        else:
-            strength_hint = "\n\n用户认可这张图片的服装风格与整体氛围，但希望姿势或构图有所变化。请在保留服装与整体氛围的基础上，对姿势或构图做出明确的小变动（如调整角度、改变肢体位置、偏移构图重心等），不能原样照搬。"
+        from .core.daily_selfie import _build_strength_hint
+        hint = _build_strength_hint(ref_strength)
 
         result_text = (
             f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
-            f"{description}"
-            f"{strength_hint}\n\n"
+            f"{description}\n\n{hint}\n\n"
             f"请根据以上描述构建自拍提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
             f"这张参考图的序号为4，会自动作为额外参考图传入，请在提示词中使用序号4来引用该参考图。"
         )
