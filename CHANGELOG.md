@@ -1,3 +1,13 @@
+### v1.2.6
+
+**🔧 优化**
+
+* 统一 strength_hint 指引：补画与手动取图现在共用 `_build_strength_hint()` 函数，措辞完全一致
+* 补画参考图编号：描述格式从 `{desc}\n指引：{guide}` 改为 `参考图{N}描述：{desc}\n\n{hint}\n\n这张参考图的序号为{N}`，与手动取图格式对齐
+* main.py 复用公共函数，删除硬编码的 strength_hint 逻辑
+
+---
+
 ### v1.2.5
 
 **🐛 Bug 修复**
