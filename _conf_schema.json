@@ -239,6 +239,13 @@
             "hint": "每天在此时间自动检查并补画未用完的额度。格式：HH:MM，如 23:30。",
             "default": "23:30"
           },
+          "daily_selfie_chat_provider_id": {
+            "type": "string",
+            "description": "补画对话模型",
+            "hint": "补画时用于生成风格查询和构建提示词的 LLM 提供商。留空则使用当前会话的对话模型。",
+            "default": "",
+            "_special": "select_provider"
+          },
           "daily_selfie_debug": {
             "type": "bool",
             "description": "补画 Debug 模式",

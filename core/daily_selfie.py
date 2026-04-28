@@ -116,6 +116,9 @@ _TASK_MODE_SYSTEM_PROMPT = (
 
 _SKILL_RULES_SYSTEM_PROMPT = (
     "## 提示词构建规则\n\n"
+    "### 最高优先级规则（覆盖一切其他规则和指引）\n"
+    "**面部必须完整露出。** 无论参考图描述或指引如何要求，都绝对不允许生成挡脸、遮脸、侧脸只露半脸、用手或物品遮挡面部的画面。"
+    "如果参考图描述中包含挡脸、遮脸的姿势，必须改为面部完整朝向镜头的替代姿势。此规则优先级高于一切指引。\n\n"
     "### 固定开头\n"
     "每条提示词必须以以下固定开头开始：\n"
     "\"以前3张参考图中的同一少女为基准，完整保留她的五官、身材等全部人体身份特征，"
@@ -130,12 +133,11 @@ _SKILL_RULES_SYSTEM_PROMPT = (
     "5. 穿搭描述必须遵守可见性原则：只写画面里能看见的服装结构与层次，不写完全被遮挡的内容\n"
     "6. 如果要调整动作姿势，则必须写完整，并且必须明确头部朝向与眼神朝向；笑容只用\"微笑\"\n"
     "7. 整体目标是单人、自然、高清、写实的生活照，不是海报、插画、拼图或宣传图\n"
-    "8. 每条参考图描述后会附带具体指引，请严格按照指引处理该参考图\n\n"
+    "8. 每条参考图描述后会附带具体指引，请严格按照指引处理该参考图，但指引不得违反最高优先级规则\n\n"
     "### 强制要求\n"
     "- 最终提示词必须使用中文\n"
     "- 不得使用或生成任何文字、标识或象征性元素\n"
     "- 人物的视觉年龄应符合设定\n"
-    "- 面部必须完整露出\n"
     "- 姿势必须物理可行。人物只有两只手和两条腿，不能同时处于矛盾状态，"
     "尤其需要注意图片的描述与你所构建的提示词之间是否冲突\n"
     "- 优先使用服装状态变化或动作间接营造性感效果，而非直接描述敏感身体部位"
@@ -243,7 +245,7 @@ class DailySelfieService:
             })
         return personas
 
-    async def run_daily_selfie(self, persona_name: str = ""):
+    async def run_daily_selfie(self, persona_name: str = "", umo: str = ""):
         if self._selfie_task and not self._selfie_task.done():
             logger.warning("[DailySelfie] 补画任务正在运行中，跳过本次触发")
             return
@@ -264,9 +266,9 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
             return
 
-        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe))
+        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe, umo))
 
-    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any):
+    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
         total_success = 0
         total_fail = 0
         request_interval = 5
@@ -318,7 +320,20 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 获取人格 system prompt 失败: %s", e)
             return ""
 
-    def _get_default_chat_provider_id(self) -> str | None:
+    def _get_chat_provider_id(self, umo: str = "") -> str | None:
+        selfie_conf = self.plugin._get_feature("selfie")
+        configured = str(selfie_conf.get("daily_selfie_chat_provider_id", "") or "").strip()
+        if configured:
+            return configured
+        if umo:
+            try:
+                provider = self.plugin.context.get_using_provider(umo=umo)
+                if provider:
+                    meta = provider.meta()
+                    if meta and getattr(meta, "id", None):
+                        return str(meta.id).strip() or None
+            except Exception:
+                pass
         try:
             provider = self.plugin.context.get_using_provider()
             if provider:
@@ -357,7 +372,7 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 开始处理人格 %s，剩余额度 %d", persona_name, remaining)
 
-        chat_provider_id = self._get_default_chat_provider_id()
+        chat_provider_id = self._get_chat_provider_id()
         if not chat_provider_id:
             logger.error("[DailySelfie] 无法获取默认 LLM Provider，跳过人格 %s", persona_name)
             return 0, 0
@@ -374,46 +389,60 @@ class DailySelfieService:
         logger.info("[DailySelfie] 人格 %s LLM第1轮返回 %d 条查询", persona_name, len(queries))
 
         ref_results = await self._search_reference_images(queries, wardrobe, persona_name)
-        if not ref_results:
-            logger.warning("[DailySelfie] 人格 %s 未找到参考图", persona_name)
+
+        ref_by_query: dict[int, dict] = {}
+        for i, ref in enumerate(ref_results):
+            if i < len(queries):
+                ref_by_query[i] = ref
+
+        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 条查询）", persona_name, len(ref_results), len(queries))
+
+        descriptions = []
+        valid_refs = []
+        for i, query in enumerate(queries):
+            ref = ref_by_query.get(i)
+            if ref:
+                desc = ref.get("description", "")
+                if desc:
+                    strength = ref.get("ref_strength", "style") or "style"
+                    if strength == "full":
+                        guide = "请完整保留这张参考图的全部视觉细节，包括姿势动作、构图与服装"
+                    elif strength == "reimagine":
+                        guide = "请仅提取这张参考图的服装款式信息，完全重新设计姿势与构图"
+                    else:
+                        guide = "请保留这张参考图的服装与整体氛围，对姿势或构图做出明确的小变动"
+                    descriptions.append(f"{desc}\n指引：{guide}")
+                    valid_refs.append(ref)
+                else:
+                    descriptions.append(f"（无参考图）拍摄方案：{query}\n指引：请根据拍摄方案自行发挥，构建完整的提示词，确保面部完整露出")
+                    valid_refs.append(None)
+            else:
+                descriptions.append(f"（无参考图）拍摄方案：{query}\n指引：请根据拍摄方案自行发挥，构建完整的提示词，确保面部完整露出")
+                valid_refs.append(None)
+
+        if not descriptions:
+            logger.warning("[DailySelfie] 人格 %s 未生成任何描述", persona_name)
             return 0, 0
 
-        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图", persona_name, len(ref_results))
-
-        batch_size = 5
-        all_prompts: list[tuple[str, dict]] = []
-        total_batches = (len(ref_results) + batch_size - 1) // batch_size
+        all_prompts: list[tuple[str, dict | None]] = []
         style_summary = "\n".join(f"- {q}" for q in queries)
 
-        for batch_num, batch_start in enumerate(range(0, len(ref_results), batch_size), 1):
-            batch = ref_results[batch_start:batch_start + batch_size]
-            descriptions = []
-            valid_refs = []
-            for r in batch:
-                desc = r.get("description", "")
-                if not desc:
-                    continue
-                strength = r.get("ref_strength", "style") or "style"
-                if strength == "full":
-                    guide = "请完整保留这张参考图的全部视觉细节，包括姿势动作、构图与服装"
-                elif strength == "reimagine":
-                    guide = "请仅提取这张参考图的服装款式信息，完全重新设计姿势与构图"
-                else:
-                    guide = "请保留这张参考图的服装与整体氛围，对姿势或构图做出明确的小变动"
-                descriptions.append(f"{desc}\n指引：{guide}")
-                valid_refs.append(r)
-            if not descriptions:
-                continue
+        batch_size = 5
+        total_batches = (len(descriptions) + batch_size - 1) // batch_size
+
+        for batch_num, batch_start in enumerate(range(0, len(descriptions), batch_size), 1):
+            batch_desc = descriptions[batch_start:batch_start + batch_size]
+            batch_refs = valid_refs[batch_start:batch_start + batch_size]
 
             prompts = await self._llm_round2(
-                chat_provider_id, persona_system_prompt, descriptions, len(descriptions),
+                chat_provider_id, persona_system_prompt, batch_desc, len(batch_desc),
                 batch_num=batch_num, total_batch=total_batches,
                 style_summary=style_summary,
             )
             logger.info("[DailySelfie] 人格 %s LLM第2轮 batch %d/%d 返回 %d 条提示词", persona_name, batch_num, total_batches, len(prompts))
             for i, prompt in enumerate(prompts):
-                if i < len(valid_refs):
-                    all_prompts.append((prompt.strip(), valid_refs[i]))
+                if i < len(batch_refs):
+                    all_prompts.append((prompt.strip(), batch_refs[i]))
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
@@ -433,15 +462,18 @@ class DailySelfieService:
                 fail += 1
                 continue
 
-            ref_image_path = ref.get("image_path", "")
-            ref_strength = ref.get("ref_strength", "style")
+            if ref is not None:
+                ref_image_path = ref.get("image_path", "")
+                ref_strength = ref.get("ref_strength", "style")
+                if not ref_image_path:
+                    logger.warning("[DailySelfie] 人格 %s 提示词 %d ref_image_path 为空，改为纯文生图", persona_name, len(tasks))
+                    ref_image_path = ""
+                    ref_strength = ""
+            else:
+                ref_image_path = ""
+                ref_strength = ""
 
-            if not ref_image_path:
-                logger.warning("[DailySelfie] 人格 %s 提示词 %d ref_image_path 为空，跳过", persona_name, len(tasks))
-                fail += 1
-                continue
-
-            logger.info("[DailySelfie] 人格 %s 创建画图任务 %d: ref=%s strength=%s", persona_name, len(tasks), ref_image_path[:50], ref_strength)
+            logger.info("[DailySelfie] 人格 %s 创建画图任务 %d: ref=%s strength=%s", persona_name, len(tasks), ref_image_path[:50] if ref_image_path else "纯文生图", ref_strength or "无")
 
             t = asyncio.create_task(
                 self._generate_one_selfie(
