@@ -189,7 +189,7 @@ class DailySelfieService:
         self.counter = DailyQuotaCounter(plugin.data_dir)
         self._running = False
         self._cron_task: Optional[asyncio.Task] = None
-        self._selfie_task: Optional[asyncio.Task] = None
+        self._selfie_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self):
         self._running = True
@@ -201,9 +201,11 @@ class DailySelfieService:
         if self._cron_task:
             self._cron_task.cancel()
             self._cron_task = None
-        if self._selfie_task:
-            self._selfie_task.cancel()
-            self._selfie_task = None
+        for name, task in list(self._selfie_tasks.items()):
+            task.cancel()
+        if self._selfie_tasks:
+            await asyncio.gather(*self._selfie_tasks.values(), return_exceptions=True)
+            self._selfie_tasks.clear()
         logger.info("[DailySelfie] 服务已停止")
 
     def _get_schedule_time(self) -> str:
@@ -266,10 +268,6 @@ class DailySelfieService:
         return personas
 
     async def run_daily_selfie(self, persona_name: str = "", umo: str = ""):
-        if self._selfie_task and not self._selfie_task.done():
-            logger.warning("[DailySelfie] 补画任务正在运行中，跳过本次触发")
-            return
-
         personas = self._get_enabled_personas()
         if not personas:
             logger.info("[DailySelfie] 没有启用补画的人格，跳过")
@@ -286,7 +284,22 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
             return
 
-        self._selfie_task = asyncio.create_task(self._execute_daily_selfie(personas, wardrobe, umo))
+        launched = []
+        for p in personas:
+            pname = p["persona_name"]
+            existing = self._selfie_tasks.get(pname)
+            if existing and not existing.done():
+                logger.warning("[DailySelfie] 人格 %s 补画任务正在运行中，跳过", pname)
+                continue
+            task = asyncio.create_task(
+                self._execute_daily_selfie([p], wardrobe, umo)
+            )
+            self._selfie_tasks[pname] = task
+            task.add_done_callback(lambda t, n=pname: self._selfie_tasks.pop(n, None))
+            launched.append(pname)
+
+        if launched:
+            logger.info("[DailySelfie] 已启动补画任务: %s", ", ".join(launched))
 
     async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
         total_success = 0
@@ -417,20 +430,21 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 条查询）", persona_name, len(ref_results), len(queries))
 
+        persona_ref_count = len(self.plugin._get_persona_config_selfie_reference_paths(persona_name))
+        search_ref_index = persona_ref_count + 1
+
         descriptions = []
         valid_refs = []
-        ref_index = 0
         for i, query in enumerate(queries):
             ref = ref_by_query.get(i)
             if ref:
                 desc = ref.get("description", "")
                 if desc:
-                    ref_index += 1
                     strength = ref.get("ref_strength", "style") or "style"
                     hint = _build_strength_hint(strength)
                     descriptions.append(
-                        f"参考图{ref_index}描述：{desc}\n\n{hint}\n\n"
-                        f"这张参考图的序号为{ref_index}，请在提示词中使用序号{ref_index}来引用该参考图。"
+                        f"参考图{search_ref_index}描述：{desc}\n\n{hint}\n\n"
+                        f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
                     )
                     valid_refs.append(ref)
                 else:
@@ -744,10 +758,10 @@ class DailySelfieService:
         wardrobe: Any,
         persona_name: str = "",
     ) -> list[dict]:
-        results = []
         used_ids: set[str] = set()
+        results: list[dict | None] = [None] * len(queries)
 
-        for query in queries:
+        async def _search_one(idx: int, query: str) -> None:
             try:
                 if hasattr(wardrobe, "get_reference_image"):
                     ref = await wardrobe.get_reference_image(
@@ -758,11 +772,12 @@ class DailySelfieService:
                         img_id = str(ref.get("image_id", ""))
                         if img_id and img_id not in used_ids:
                             used_ids.add(img_id)
-                            results.append(ref)
+                            results[idx] = ref
             except Exception as e:
                 logger.warning("[DailySelfie] 参考图搜索失败: query=%s error=%s", query[:50], e)
 
-        return results
+        await asyncio.gather(*[_search_one(i, q) for i, q in enumerate(queries)])
+        return [r for r in results if r is not None]
 
     async def _get_style_pool(self, wardrobe: Any) -> list[str]:
         try:
