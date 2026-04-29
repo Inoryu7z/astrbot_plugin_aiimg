@@ -1645,11 +1645,14 @@ class GiteeAIImagePlugin(Star):
         from .core.daily_selfie import _build_strength_hint
         hint = _build_strength_hint(ref_strength)
 
+        persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
+        wardrobe_ref_index = persona_ref_count + 1
+
         result_text = (
             f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
             f"{description}\n\n{hint}\n\n"
             f"请根据以上描述构建自拍提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
-            f"这张参考图的序号为4，会自动作为额外参考图传入，请在提示词中使用序号4来引用该参考图。"
+            f"这张参考图的序号为{wardrobe_ref_index}，会自动作为额外参考图传入，请在提示词中使用序号{wardrobe_ref_index}来引用该参考图。"
         )
         return self._build_llm_tool_text_desc_result(result_text)
 
