@@ -383,8 +383,14 @@
       "image_context_mode": {
         "type": "string",
         "description": "图片生成后返回给 LLM 上下文的方式",
-        "hint": "可选值：image（返回压缩图，LLM可识别图片内容并回复）/ text（返回提示词文字描述）/ none（不返回）。默认 image。",
+        "hint": "可选值：image（返回压缩图，LLM可识别图片内容并回复）/ text（返回提示词文字描述）/ none（不返回）。默认 image。仅在后台生成模式关闭时生效。",
         "default": "image"
+      },
+      "background_generate": {
+        "type": "bool",
+        "description": "后台生成模式（不阻塞对话）",
+        "hint": "开启后，LLM调用画图工具时会立即返回，图片在后台生成完成后自动发送。期间你可以继续和bot聊天。关闭则等待图片生成完毕后才继续对话（LLM可在上下文中看到图片）。",
+        "default": true
       }
     }
   },

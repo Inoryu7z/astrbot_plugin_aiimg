@@ -141,6 +141,7 @@ class GiteeAIImagePlugin(Star):
         self._image_inflight: dict[str, int] = {}
         self._video_inflight: dict[str, int] = {}
         self._video_tasks: set[asyncio.Task] = set()
+        self._image_tasks: set[asyncio.Task] = set()
 
         self._patch_tool_image_cache_runtime()
 
@@ -679,6 +680,14 @@ class GiteeAIImagePlugin(Star):
         self.debouncer.clear_all()
         try:
             tasks = list(getattr(self, "_video_tasks", []))
+            for t in tasks:
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception:
+            pass
+        try:
+            tasks = list(getattr(self, "_image_tasks", []))
             for t in tasks:
                 t.cancel()
             if tasks:
@@ -1371,128 +1380,141 @@ class GiteeAIImagePlugin(Star):
         size = output if output and "x" in output else None
         resolution = output if output and size is None else None
 
+        if self._is_background_generate():
+            try:
+                await mark_processing(event)
+            except Exception:
+                await self._end_user_job(user_id, kind="image")
+                await self._signal_llm_tool_failure(event)
+                return self._build_llm_tool_failure_result("标记处理中失败")
+
+            task = asyncio.create_task(
+                self._async_llm_tool_generate(
+                    event, prompt, m, target_backend, size, resolution, user_id
+                )
+            )
+            self._image_tasks.add(task)
+            task.add_done_callback(lambda t: self._image_tasks.discard(t))
+            return self._build_llm_tool_background_result(prompt, m)
+
         try:
             await mark_processing(event)
-
-            if m in {"selfie_ref", "selfie", "ref"}:
-                logger.info("[aiimg_generate] route=selfie_ref (explicit)")
-                if not self._is_selfie_enabled():
-                    logger.warning(
-                        "[aiimg_generate] selfie blocked: features.selfie.enabled=false"
-                    )
-                    await self._signal_llm_tool_failure(event)
-                    return self._build_llm_tool_failure_result("自拍功能未启用")
-                if not self._is_selfie_llm_enabled():
-                    logger.warning(
-                        "[aiimg_generate] selfie blocked: features.selfie.llm_tool_enabled=false"
-                    )
-                    await self._signal_llm_tool_failure(event)
-                    return self._build_llm_tool_failure_result("自拍功能未启用")
-                image_path = await self._generate_selfie_image(
-                    event,
-                    prompt,
-                    target_backend,
-                    size=size,
-                    resolution=resolution,
-                )
-                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode="selfie")
-
-            # 自动模式：优先识别"自拍"语义 + 已配置参考照
-            if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
-                if not self._is_selfie_enabled():
-                    logger.info(
-                        "[aiimg_generate] auto-selfie skipped: features.selfie.enabled=false"
-                    )
-                elif not self._is_selfie_llm_enabled():
-                    logger.info(
-                        "[aiimg_generate] auto-selfie skipped: features.selfie.llm_tool_enabled=false"
-                    )
-                else:
-                    try:
-                        logger.info("[aiimg_generate] route=auto->selfie_ref")
-                        image_path = await self._generate_selfie_image(
-                            event,
-                            prompt,
-                            target_backend,
-                            size=size,
-                            resolution=resolution,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "[aiimg_generate] auto-selfie failed, fallback to draw/edit: %s",
-                            e,
-                        )
-                    else:
-                        return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode="selfie")
-
-            # 改图：用户消息中有图片（不含头像兜底）或显式指定
-            has_msg_images = await self._has_message_images(event)
-            prefetched_edit_image_segs = None
-            has_at_avatar_refs = False
-            if m == "auto" and not has_msg_images:
-                prefetched_edit_image_segs = await get_images_from_event(
-                    event,
-                    include_avatar=True,
-                    include_sender_avatar_fallback=False,
-                )
-                has_at_avatar_refs = bool(prefetched_edit_image_segs)
-
-            if m in {"edit", "img2img", "aiedit"} or (
-                    m == "auto" and (has_msg_images or has_at_avatar_refs)
-            ):
-                logger.info("[aiimg_generate] route=edit")
-                edit_conf = self._get_feature("edit")
-                if not bool(edit_conf.get("enabled", True)):
-                    await self._signal_llm_tool_failure(event)
-                    return self._build_llm_tool_failure_result("改图功能未启用")
-                if not bool(edit_conf.get("llm_tool_enabled", True)):
-                    await self._signal_llm_tool_failure(event)
-                    return self._build_llm_tool_failure_result("改图功能未启用")
-                image_segs = prefetched_edit_image_segs
-                if image_segs is None:
-                    image_segs = await get_images_from_event(
-                        event,
-                        include_avatar=True,
-                        include_sender_avatar_fallback=False,
-                    )
-                bytes_images = await self._image_segs_to_bytes(image_segs)
-                if not bytes_images:
-                    await self._signal_llm_tool_failure(event)
-                    return self._build_llm_tool_failure_result("没有找到可编辑的图片")
-
-                image_path = await self.edit.edit(
-                    prompt=prompt,
-                    images=bytes_images,
-                    backend=target_backend,
-                    size=size,
-                    resolution=resolution,
-                )
-                return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
-
-            # 默认：文生图
-            draw_conf = self._get_feature("draw")
-            if not bool(draw_conf.get("enabled", True)):
-                await self._signal_llm_tool_failure(event)
-                return self._build_llm_tool_failure_result("文生图功能未启用")
-            if not bool(draw_conf.get("llm_tool_enabled", True)):
-                await self._signal_llm_tool_failure(event)
-                return self._build_llm_tool_failure_result("文生图功能未启用")
-            if not prompt:
-                prompt = "a selfie photo"
-
-            logger.info("[aiimg_generate] route=draw")
-            image_path = await self.draw.generate(
-                prompt,
-                provider_id=target_backend,
-                size=size,
-                resolution=resolution,
+            image_path, result_mode = await self._execute_llm_tool_generate_core(
+                event, prompt, m, target_backend, size, resolution
             )
-            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt)
-
+            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode)
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
             await self._signal_llm_tool_failure(event)
             return self._build_llm_tool_failure_result(str(e))
+        finally:
+            await self._end_user_job(user_id, kind="image")
+
+    async def _execute_llm_tool_generate_core(
+        self,
+        event: AstrMessageEvent,
+        prompt: str,
+        m: str,
+        target_backend: str | None,
+        size: str | None,
+        resolution: str | None,
+    ) -> tuple[Path, str]:
+        if m in {"selfie_ref", "selfie", "ref"}:
+            logger.info("[aiimg_generate] route=selfie_ref (explicit)")
+            if not self._is_selfie_enabled():
+                raise RuntimeError("自拍功能未启用")
+            if not self._is_selfie_llm_enabled():
+                raise RuntimeError("自拍功能未启用")
+            image_path = await self._generate_selfie_image(
+                event, prompt, target_backend, size=size, resolution=resolution,
+            )
+            return image_path, "selfie"
+
+        if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
+            if not self._is_selfie_enabled():
+                logger.info("[aiimg_generate] auto-selfie skipped: features.selfie.enabled=false")
+            elif not self._is_selfie_llm_enabled():
+                logger.info("[aiimg_generate] auto-selfie skipped: features.selfie.llm_tool_enabled=false")
+            else:
+                try:
+                    logger.info("[aiimg_generate] route=auto->selfie_ref")
+                    image_path = await self._generate_selfie_image(
+                        event, prompt, target_backend, size=size, resolution=resolution,
+                    )
+                    return image_path, "selfie"
+                except Exception as e:
+                    logger.warning("[aiimg_generate] auto-selfie failed, fallback to draw/edit: %s", e)
+
+        has_msg_images = await self._has_message_images(event)
+        prefetched_edit_image_segs = None
+        has_at_avatar_refs = False
+        if m == "auto" and not has_msg_images:
+            prefetched_edit_image_segs = await get_images_from_event(
+                event, include_avatar=True, include_sender_avatar_fallback=False,
+            )
+            has_at_avatar_refs = bool(prefetched_edit_image_segs)
+
+        if m in {"edit", "img2img", "aiedit"} or (
+            m == "auto" and (has_msg_images or has_at_avatar_refs)
+        ):
+            logger.info("[aiimg_generate] route=edit")
+            edit_conf = self._get_feature("edit")
+            if not bool(edit_conf.get("enabled", True)):
+                raise RuntimeError("改图功能未启用")
+            if not bool(edit_conf.get("llm_tool_enabled", True)):
+                raise RuntimeError("改图功能未启用")
+            image_segs = prefetched_edit_image_segs
+            if image_segs is None:
+                image_segs = await get_images_from_event(
+                    event, include_avatar=True, include_sender_avatar_fallback=False,
+                )
+            bytes_images = await self._image_segs_to_bytes(image_segs)
+            if not bytes_images:
+                raise RuntimeError("没有找到可编辑的图片")
+            image_path = await self.edit.edit(
+                prompt=prompt, images=bytes_images, backend=target_backend,
+                size=size, resolution=resolution,
+            )
+            return image_path, "edit"
+
+        draw_conf = self._get_feature("draw")
+        if not bool(draw_conf.get("enabled", True)):
+            raise RuntimeError("文生图功能未启用")
+        if not bool(draw_conf.get("llm_tool_enabled", True)):
+            raise RuntimeError("文生图功能未启用")
+        if not prompt:
+            prompt = "a selfie photo"
+
+        logger.info("[aiimg_generate] route=draw")
+        image_path = await self.draw.generate(
+            prompt, provider_id=target_backend, size=size, resolution=resolution,
+        )
+        return image_path, "draw"
+
+    async def _async_llm_tool_generate(
+        self,
+        event: AstrMessageEvent,
+        prompt: str,
+        mode: str,
+        target_backend: str | None,
+        size: str | None,
+        resolution: str | None,
+        user_id: str,
+    ) -> None:
+        try:
+            image_path, result_mode = await self._execute_llm_tool_generate_core(
+                event, prompt, mode, target_backend, size, resolution
+            )
+            self._remember_last_image(event, image_path, mode=result_mode)
+            sent = await self._send_image_with_fallback(event, image_path)
+            if sent:
+                await mark_success(event)
+            else:
+                await self._signal_llm_tool_failure(event)
+                logger.warning("[aiimg_generate][bg] 图片发送失败: reason=%s", sent.reason)
+        except Exception as e:
+            logger.error(f"[aiimg_generate][bg] 失败: {e}", exc_info=True)
+            await self._signal_llm_tool_failure(event)
         finally:
             await self._end_user_job(user_id, kind="image")
 
@@ -2299,6 +2321,10 @@ class GiteeAIImagePlugin(Star):
             mode = "image"
         return mode
 
+    def _is_background_generate(self) -> bool:
+        conf = self._get_llm_tool_conf()
+        return self._as_bool(conf.get("background_generate", True), default=True)
+
     async def _ensure_tool_image_cache_dir(self) -> None:
         tool_image_dir = Path(get_astrbot_temp_path()) / "tool_images"
         await asyncio.to_thread(tool_image_dir.mkdir, parents=True, exist_ok=True)
@@ -2337,6 +2363,14 @@ class GiteeAIImagePlugin(Star):
     def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
         text = f"发送了一张图片" + (f"：{desc}" if desc else "")
+        return mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text=text)]
+        )
+
+    @staticmethod
+    def _build_llm_tool_background_result(prompt: str, mode: str) -> mcp.types.CallToolResult:
+        mode_desc = {"text": "文生图", "edit": "改图", "selfie_ref": "自拍", "auto": "图片"}.get(mode, "图片")
+        text = f"正在生成{mode_desc}，完成后会自动发送。请以符合你人设的口吻告知用户图片正在生成中。"
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
