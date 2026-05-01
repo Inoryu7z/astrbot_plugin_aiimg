@@ -236,8 +236,14 @@
           "daily_selfie_schedule_time": {
             "type": "string",
             "description": "每日自拍补画触发时间",
-            "hint": "每天在此时间自动检查并补画未用完的额度。格式：HH:MM，如 23:30。",
-            "default": "23:30"
+            "hint": "每天在此时间自动检查并补画未用完的额度。格式：HH:MM，如 23:00。",
+            "default": "23:00"
+          },
+          "daily_selfie_retry_on_fail": {
+            "type": "bool",
+            "description": "失败自动重试",
+            "hint": "开启后，补画失败或超时的图片会自动重新生成，直到当天额度用完。每次重试间隔30秒。",
+            "default": true
           },
           "daily_selfie_chat_provider_id": {
             "type": "string",
