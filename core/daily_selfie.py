@@ -348,7 +348,7 @@ class DailySelfieService:
     async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
         total_success = 0
         total_fail = 0
-        request_interval = 5
+        request_interval = 30
 
         debug_mode = self._is_debug()
         selfie_conf = self.plugin._get_feature("selfie")
@@ -563,15 +563,72 @@ class DailySelfieService:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("[DailySelfie] 人格 %s 并发画图完成: tasks=%d results=%d", persona_name, len(tasks), len(results))
+
+        failed_items: list[tuple[str, str, str]] = []
+
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 fail += 1
                 logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
+                if i < len(all_prompts):
+                    prompt_text, ref_info = all_prompts[i]
+                    ref_path = ref_info.get("image_path", "") if ref_info else ""
+                    ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
+                    failed_items.append((prompt_text, ref_path, ref_strength))
             elif r is True:
                 success += 1
             else:
                 fail += 1
                 logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 False", persona_name, i)
+                if i < len(all_prompts):
+                    prompt_text, ref_info = all_prompts[i]
+                    ref_path = ref_info.get("image_path", "") if ref_info else ""
+                    ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
+                    failed_items.append((prompt_text, ref_path, ref_strength))
+
+        if failed_items:
+            retry_enabled = self._is_retry_on_fail()
+            logger.info(
+                "[DailySelfie] 人格 %s 失败 %d 张，重试开关=%s",
+                persona_name, len(failed_items), retry_enabled,
+            )
+
+            if retry_enabled:
+                for prompt_text, ref_path, ref_strength in failed_items:
+                    cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
+                    if cur_remaining <= 0:
+                        logger.info("[DailySelfie] 人格 %s 重试时额度用完，停止", persona_name)
+                        break
+
+                    logger.info(
+                        "[DailySelfie] 人格 %s 重试画图: ref=%s",
+                        persona_name, ref_path[:50] if ref_path else "纯文生图",
+                    )
+                    await asyncio.sleep(request_interval)
+
+                    try:
+                        image_path = await asyncio.wait_for(
+                            self.plugin._generate_daily_selfie_image(
+                                persona_name=persona_name,
+                                prompt=prompt_text,
+                                ref_image_path=ref_path,
+                                ref_strength=ref_strength,
+                                persona_conf=persona["config"],
+                            ),
+                            timeout=300,
+                        )
+                        if image_path:
+                            await self.counter.increment(provider_id)
+                            logger.info("[DailySelfie] 人格 %s 重试成功: %s", persona_name, image_path)
+                            await self._save_to_wardrobe(image_path, persona_name)
+                            success += 1
+                            fail -= 1
+                        else:
+                            logger.warning("[DailySelfie] 人格 %s 重试返回空路径", persona_name)
+                    except asyncio.TimeoutError:
+                        logger.error("[DailySelfie] 人格 %s 重试超时(300s)", persona_name)
+                    except Exception as e:
+                        logger.error("[DailySelfie] 人格 %s 重试失败: %s", persona_name, e)
 
         return success, fail
 
@@ -614,6 +671,10 @@ class DailySelfieService:
     def _is_debug(self) -> bool:
         selfie_conf = self.plugin._get_feature("selfie")
         return bool(selfie_conf.get("daily_selfie_debug", False))
+
+    def _is_retry_on_fail(self) -> bool:
+        selfie_conf = self.plugin._get_feature("selfie")
+        return bool(selfie_conf.get("daily_selfie_retry_on_fail", True))
 
     async def _save_to_wardrobe(self, image_path: Path, persona_name: str) -> None:
         wardrobe = self.plugin._get_wardrobe_instance()
