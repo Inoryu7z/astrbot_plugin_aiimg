@@ -2625,6 +2625,22 @@ class GiteeAIImagePlugin(Star):
             return chain_items if chain_items else None
         return None
 
+    def _get_persona_video_chain(self, persona_name: str) -> list[str] | None:
+        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的视频链路"""
+        for idx in [1, 2]:
+            conf = self._get_selfie_persona_config(idx)
+            if not conf:
+                continue
+            conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            if conf_persona != persona_name:
+                continue
+            provider_ids = conf.get("video_provider_ids", [])
+            if not isinstance(provider_ids, list):
+                continue
+            result = [str(pid).strip() for pid in provider_ids if str(pid).strip()]
+            return result if result else None
+        return None
+
     def _get_persona_selfie_config(self, persona_name: str) -> dict | None:
         """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的完整配置"""
         for idx in [1, 2]:
