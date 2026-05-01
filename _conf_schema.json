@@ -311,6 +311,18 @@
             "description": "补画计数的提供商ID",
             "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
             "default": ""
+          },
+          "video_provider_ids": {
+            "type": "list",
+            "description": "视频服务商链路（按顺序兜底）",
+            "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。留空则使用全局视频链路。",
+            "default": []
+          },
+          "daily_selfie_schedule_time": {
+            "type": "string",
+            "description": "补画触发时间（人格级）",
+            "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
+            "default": ""
           }
         }
       },
@@ -370,6 +382,18 @@
             "type": "string",
             "description": "补画计数的提供商ID",
             "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
+            "default": ""
+          },
+          "video_provider_ids": {
+            "type": "list",
+            "description": "视频服务商链路（按顺序兜底）",
+            "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。留空则使用全局视频链路。",
+            "default": []
+          },
+          "daily_selfie_schedule_time": {
+            "type": "string",
+            "description": "补画触发时间（人格级）",
+            "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
             "default": ""
           }
         }

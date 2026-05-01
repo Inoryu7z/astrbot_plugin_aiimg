@@ -1,8 +1,19 @@
+### v1.3.0
+
+**🚀 新功能：人格级视频生成 + 人格级补拍时间**
+
+* 视频生成支持人格级：在 selfie_persona_N 配置中新增 video_provider_ids 字段，每个人格可独立指定视频服务商链路，实现 A人格优先调用M提供商、B人格优先调用N提供商
+* 补画触发时间支持人格级：在 selfie_persona_N 配置中新增 daily_selfie_schedule_time 字段，每个人格可设置独立的补画触发时间，留空则使用全局设置
+* 新增 _get_persona_video_chain(persona_name) 方法：从人格配置获取专属视频链路
+* cron 循环改为多时间段感知：自动计算所有启用人格中的最早触发时间，到点只运行匹配当前时间的人格
+
+---
+
 ### v1.2.9
 
 **🔧 优化**
 
-* \iimg_wardrobe_preview\ 提示词增强：返回值中新增“前N张参考图是你的人设图”说明，LLM 现在能明确区分人设图与衣橱参考图，避免将 wardrobe 参考图误当人设图描述
+* `aiimg_wardrobe_preview` 提示词增强：返回值中新增"前N张参考图是你的人设图"说明，LLM 现在能明确区分人设图与衣橱参考图，避免将 wardrobe 参考图误当人设图描述
 
 ---
 

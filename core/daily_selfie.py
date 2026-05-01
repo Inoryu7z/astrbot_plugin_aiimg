@@ -208,25 +208,51 @@ class DailySelfieService:
             self._selfie_tasks.clear()
         logger.info("[DailySelfie] 服务已停止")
 
-    def _get_schedule_time(self) -> str:
+    def _get_global_schedule_time(self) -> str:
         selfie_conf = self.plugin._get_feature("selfie")
         return str(selfie_conf.get("daily_selfie_schedule_time", "23:30") or "23:30").strip()
 
-    def _parse_schedule_time(self) -> tuple[int, int]:
-        time_str = self._get_schedule_time()
+    def _get_persona_schedule_time(self, persona_name: str) -> str:
+        conf = self.plugin._get_persona_selfie_config(persona_name)
+        if conf:
+            custom = str(conf.get("daily_selfie_schedule_time", "") or "").strip()
+            if custom:
+                return custom
+        return self._get_global_schedule_time()
+
+    def _parse_time_str(self, time_str: str) -> tuple[int, int]:
         try:
             parts = time_str.split(":")
             return int(parts[0]), int(parts[1])
         except (ValueError, IndexError):
             return 23, 30
 
-    def _seconds_until_next_run(self) -> float:
+    def _seconds_until(self, hour: int, minute: int) -> float:
         now = datetime.now()
-        hour, minute = self._parse_schedule_time()
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
         return (target - now).total_seconds()
+
+    def _seconds_until_next_run(self) -> float:
+        schedules = self._get_all_schedule_times()
+        if not schedules:
+            return self._seconds_until(23, 30)
+        min_seconds = float("inf")
+        for hour, minute in schedules.values():
+            s = self._seconds_until(hour, minute)
+            if s < min_seconds:
+                min_seconds = s
+        return min_seconds
+
+    def _get_all_schedule_times(self) -> dict[str, tuple[int, int]]:
+        schedules = {}
+        personas = self._get_enabled_personas()
+        for p in personas:
+            pname = p["persona_name"]
+            time_str = self._get_persona_schedule_time(pname)
+            schedules[pname] = self._parse_time_str(time_str)
+        return schedules
 
     async def _cron_loop(self):
         while self._running:
@@ -236,12 +262,27 @@ class DailySelfieService:
                 await asyncio.sleep(wait_seconds)
                 if not self._running:
                     break
-                await self.run_daily_selfie()
+                await self._run_scheduled_personas()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("[DailySelfie] 定时任务异常: %s", e)
                 await asyncio.sleep(60)
+
+    async def _run_scheduled_personas(self):
+        now = datetime.now()
+        current_h, current_m = now.hour, now.minute
+        scheduled_personas = []
+        for p in self._get_enabled_personas():
+            pname = p["persona_name"]
+            h, m = self._parse_time_str(self._get_persona_schedule_time(pname))
+            if h == current_h and m == current_m:
+                scheduled_personas.append(p)
+        if not scheduled_personas:
+            logger.debug("[DailySelfie] 当前时间无匹配的补画人格，跳过")
+            return
+        logger.info("[DailySelfie] 触发补画人格: %s", ", ".join(p["persona_name"] for p in scheduled_personas))
+        await self._run_personas(scheduled_personas)
 
     def _get_enabled_personas(self) -> list[dict[str, Any]]:
         personas = []
@@ -279,6 +320,9 @@ class DailySelfieService:
                 logger.info("[DailySelfie] 人格 %s 未启用补画，跳过", persona_name)
                 return
 
+        await self._run_personas(personas, umo)
+
+    async def _run_personas(self, personas: list[dict], umo: str = ""):
         wardrobe = self.plugin._get_wardrobe_instance()
         if not wardrobe:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
