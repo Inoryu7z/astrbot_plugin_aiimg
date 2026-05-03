@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from datetime import datetime, timedelta
@@ -565,26 +566,25 @@ class DailySelfieService:
         logger.info("[DailySelfie] 人格 %s 并发画图完成: tasks=%d results=%d", persona_name, len(tasks), len(results))
 
         failed_items: list[tuple[str, str, str]] = []
+        success_paths: list[Path] = []
 
         for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                fail += 1
-                logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
-                if i < len(all_prompts):
-                    prompt_text, ref_info = all_prompts[i]
-                    ref_path = ref_info.get("image_path", "") if ref_info else ""
-                    ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
-                    failed_items.append((prompt_text, ref_path, ref_strength))
-            elif r is True:
+            if isinstance(r, Path):
                 success += 1
+                success_paths.append(r)
             else:
                 fail += 1
-                logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 False", persona_name, i)
+                if isinstance(r, Exception):
+                    logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
+                else:
+                    logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 None", persona_name, i)
                 if i < len(all_prompts):
                     prompt_text, ref_info = all_prompts[i]
                     ref_path = ref_info.get("image_path", "") if ref_info else ""
                     ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
                     failed_items.append((prompt_text, ref_path, ref_strength))
+
+        await self._publish_to_qzone(persona_name, success_paths, persona["config"])
 
         if failed_items:
             retry_enabled = self._is_retry_on_fail()
@@ -639,7 +639,7 @@ class DailySelfieService:
         ref_image_path: str,
         ref_strength: str,
         persona: dict,
-    ) -> bool:
+    ) -> Path | None:
         provider_id = persona["provider_id"]
         logger.info("[DailySelfie] 人格 %s 开始画图: ref=%s prompt_len=%d", persona_name, ref_image_path[:50] if ref_image_path else "空", len(prompt))
         try:
@@ -657,16 +657,16 @@ class DailySelfieService:
                 await self.counter.increment(provider_id)
                 logger.info("[DailySelfie] 人格 %s 补画成功: %s", persona_name, image_path)
                 await self._save_to_wardrobe(image_path, persona_name)
-                return True
+                return image_path
             else:
                 logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
-                return False
+                return None
         except asyncio.TimeoutError:
             logger.error("[DailySelfie] 人格 %s 画图超时(300s)", persona_name)
-            return False
+            return None
         except Exception as e:
             logger.error("[DailySelfie] 人格 %s 生图失败: %s", persona_name, e, exc_info=True)
-            return False
+            return None
 
     def _is_debug(self) -> bool:
         selfie_conf = self.plugin._get_feature("selfie")
@@ -695,6 +695,122 @@ class DailySelfieService:
                 logger.info("[DailySelfie] 补画图片已保存到衣橱: %s", image_id)
         except Exception as e:
             logger.debug("[DailySelfie] 补画图片保存到衣橱失败: %s", e)
+
+    async def _publish_to_qzone(
+        self,
+        persona_name: str,
+        image_paths: list[Path],
+        persona_conf: dict,
+    ) -> None:
+        if not image_paths:
+            return
+
+        enabled = self.plugin._as_bool(
+            persona_conf.get("daily_selfie_qzone_publish_enabled", False), default=False
+        )
+        provider_id = str(
+            persona_conf.get("daily_selfie_qzone_chat_provider_id", "") or ""
+        ).strip()
+
+        if not enabled or not provider_id:
+            logger.info(
+                "[DailySelfie] 人格 %s 未启用空间发布或未配置多模态提供商，跳过",
+                persona_name,
+            )
+            return
+
+        caption = await self._generate_qzone_caption(
+            persona_name, image_paths, provider_id
+        )
+        if not caption:
+            logger.warning("[DailySelfie] 人格 %s 生成空间配文失败", persona_name)
+            return
+
+        image_bytes_list: list[bytes] = []
+        for p in image_paths:
+            try:
+                image_bytes_list.append(await asyncio.to_thread(p.read_bytes))
+            except Exception as e:
+                logger.warning("[DailySelfie] 读取图片失败: %s, err=%s", p, e)
+
+        if not image_bytes_list:
+            return
+
+        qzone_star = self.plugin.context.get_registered_star(
+            "astrbot_plugin_qzone_Inoryu7z"
+        )
+        if not qzone_star or not qzone_star.activated:
+            logger.warning("[DailySelfie] qzone 插件未启用，跳过发布")
+            return
+
+        qzone_plugin = qzone_star.star_cls
+        try:
+            await qzone_plugin.service.publish_post(
+                text=caption, images=image_bytes_list
+            )
+            logger.info(
+                "[DailySelfie] 人格 %s 空间说说发布成功，共 %d 张图",
+                persona_name,
+                len(image_bytes_list),
+            )
+        except Exception as e:
+            logger.error(
+                "[DailySelfie] 人格 %s 空间说说发布失败: %s", persona_name, e
+            )
+
+    async def _generate_qzone_caption(
+        self,
+        persona_name: str,
+        image_paths: list[Path],
+        provider_id: str,
+    ) -> str:
+        persona_system_prompt = self._get_persona_system_prompt(persona_name)
+
+        data_uris: list[str] = []
+        for p in image_paths[:9]:
+            try:
+                img_bytes = await asyncio.to_thread(p.read_bytes)
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                data_uris.append(f"data:image/jpeg;base64,{b64}")
+            except Exception as e:
+                logger.warning(
+                    "[DailySelfie] 图片 base64 编码失败: %s, err=%s", p, e
+                )
+
+        user_prompt = (
+            "你今天拍了一些照片，请以第一人称写一条QQ空间说说配文。"
+            "要求：像日常分享一样随意自然，不要逐张图片描述，可以聊聊今天的心情、做了什么事、或者对照片的随意点评。"
+            "禁止使用任何markdown格式、编号、标签、emoji。"
+        )
+
+        try:
+            resp = await asyncio.wait_for(
+                self.plugin.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=user_prompt,
+                    image_urls=data_uris if data_uris else None,
+                    system_prompt=persona_system_prompt,
+                ),
+                timeout=120,
+            )
+            text = (getattr(resp, "completion_text", "") or "").strip()
+            if text:
+                logger.info(
+                    "[DailySelfie] 人格 %s 生成空间配文成功: %s",
+                    persona_name,
+                    text[:50],
+                )
+                return text
+        except asyncio.TimeoutError:
+            logger.error(
+                "[DailySelfie] 人格 %s 生成空间配文超时", persona_name
+            )
+        except Exception as e:
+            logger.error(
+                "[DailySelfie] 人格 %s 生成空间配文失败: %s", persona_name, e
+            )
+
+        return ""
 
     async def _llm_round1(
         self,

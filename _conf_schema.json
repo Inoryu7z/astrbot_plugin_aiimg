@@ -329,6 +329,19 @@
             "description": "补画触发时间（人格级）",
             "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
             "default": ""
+          },
+          "daily_selfie_qzone_publish_enabled": {
+            "type": "bool",
+            "description": "补画完成后自动发空间说说",
+            "hint": "开启后，每日补画完成后会用生成的图片发一条QQ空间说说。需要先配置下方多模态提供商。",
+            "default": false
+          },
+          "daily_selfie_qzone_chat_provider_id": {
+            "type": "string",
+            "description": "说说配文多模态模型",
+            "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
+            "default": "",
+            "_special": "select_provider"
           }
         }
       },
@@ -401,6 +414,19 @@
             "description": "补画触发时间（人格级）",
             "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
             "default": ""
+          },
+          "daily_selfie_qzone_publish_enabled": {
+            "type": "bool",
+            "description": "补画完成后自动发空间说说",
+            "hint": "开启后，每日补画完成后会用生成的图片发一条QQ空间说说。需要先配置下方多模态提供商。",
+            "default": false
+          },
+          "daily_selfie_qzone_chat_provider_id": {
+            "type": "string",
+            "description": "说说配文多模态模型",
+            "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
+            "default": "",
+            "_special": "select_provider"
           }
         }
       }

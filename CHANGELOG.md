@@ -1,4 +1,15 @@
-### v1.3.1
+### v1.3.2
+
+**🚀 新功能：补画完成后自动发空间说说**
+
+* 补画完成后自动将生成的图片发布到 QQ 空间说说，角色以第一人称写日常分享配文
+* 人格级配置：`daily_selfie_qzone_publish_enabled`（开关）和 `daily_selfie_qzone_chat_provider_id`（多模态 LLM 提供商，独立配置，与补画对话模型分开）
+* 新增 `_publish_to_qzone` 方法：检查配置 → 生成配文 → 读取图片 bytes → 调用 QZone 插件发布说说
+* 新增 `_generate_qzone_caption` 方法：调用多模态 LLM 看图生成自然随意的空间说说配文
+* `_generate_one_selfie` 返回值从 `bool` 改为 `Path | None`，支持收集成功图片路径
+
+---
+
 
 **🔧 优化：间隔拉长 + 失败自动重试**
 
