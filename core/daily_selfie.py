@@ -466,7 +466,13 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 人格 %s LLM第1轮返回 %d 条查询", persona_name, len(queries))
 
-        ref_results = await self._search_reference_images(queries, wardrobe, persona_name)
+        selfie_conf = self.plugin._get_feature("selfie")
+        daily_ref_min_sim_raw = float(selfie_conf.get("daily_selfie_ref_min_similarity", 0) or 0)
+        daily_ref_min_sim = daily_ref_min_sim_raw if daily_ref_min_sim_raw > 0 else None
+        if daily_ref_min_sim is not None:
+            logger.info("[DailySelfie] 人格 %s 补拍搜图阈值: %s", persona_name, daily_ref_min_sim)
+
+        ref_results = await self._search_reference_images(queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
 
         ref_by_query: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
@@ -485,18 +491,27 @@ class DailySelfieService:
             if ref:
                 desc = ref.get("description", "")
                 if desc:
-                    strength = ref.get("ref_strength", "style") or "style"
-                    hint = _build_strength_hint(strength)
+                    hint = _build_strength_hint("reimagine")
                     descriptions.append(
                         f"参考图{search_ref_index}描述：{desc}\n\n{hint}\n\n"
                         f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
                     )
                     valid_refs.append(ref)
                 else:
-                    descriptions.append(f"（无参考图）拍摄方案：{query}\n指引：请根据拍摄方案自行发挥，构建完整的提示词，确保面部完整露出")
+                    descriptions.append(
+                        f"（无参考图）拍摄方案：{query}\n"
+                        f"指引：请根据拍摄方案自由发挥，用自然连贯的长句构建完整提示词。"
+                        f"务必详细画面，包括场景、衣服的款式、材质、颜色、层次和穿着状态等信息，"
+                        f"确保画面生动具体，面部必须完整露出。"
+                    )
                     valid_refs.append(None)
             else:
-                descriptions.append(f"（无参考图）拍摄方案：{query}\n指引：请根据拍摄方案自行发挥，构建完整的提示词，确保面部完整露出")
+                descriptions.append(
+                    f"（无参考图）拍摄方案：{query}\n"
+                    f"指引：请根据拍摄方案自由发挥，用自然连贯的长句构建完整提示词。"
+                    f"务必详细画面，包括场景、衣服的款式、材质、颜色、层次和穿着状态等信息，"
+                    f"确保画面生动具体，面部必须完整露出。"
+                )
                 valid_refs.append(None)
 
         if not descriptions:
@@ -978,6 +993,7 @@ class DailySelfieService:
         queries: list[str],
         wardrobe: Any,
         persona_name: str = "",
+        min_similarity: float | None = None,
     ) -> list[dict]:
         used_ids: set[str] = set()
         results: list[dict | None] = [None] * len(queries)
@@ -988,6 +1004,7 @@ class DailySelfieService:
                     ref = await wardrobe.get_reference_image(
                         query=query,
                         current_persona=persona_name,
+                        min_similarity=min_similarity,
                     )
                     if ref:
                         img_id = str(ref.get("image_id", ""))
