@@ -12,7 +12,7 @@ from .gitee_edit import GiteeEditBackend
 from .gitee_sizes import GITEE_SUPPORTED_SIZES, normalize_size_text
 from .grok2api_images_backend import Grok2ApiImagesBackend
 from .grok_images_backend import GrokImagesBackend
-from .grok_video_service import GrokVideoService
+from .grok_video_service import GrokVideoService, RealGrokVideoService
 from .jimeng_api_backend import JimengApiBackend
 from .openai_chat_image_backend import OpenAIChatImageBackend
 from .openai_compat_backend import OpenAICompatBackend
@@ -531,6 +531,8 @@ class ProviderRegistry:
         template_key = str(p.get("__template_key") or "").strip()
         if template_key == "grok_video":
             backend: object = GrokVideoService(settings=p)
+        elif template_key == "yunwu_grok_video":
+            backend: object = RealGrokVideoService(settings=p)
         elif template_key == "grok2api_video":
             from .grok2api_video_service import Grok2ApiVideoService
             backend = Grok2ApiVideoService(settings=p)

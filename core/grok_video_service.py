@@ -627,3 +627,99 @@ class DoubaoSeedanceService:
                 if isinstance(e, (RuntimeError, TimeoutError)): raise
                 await asyncio.sleep(5)
 GrokVideoService = DoubaoSeedanceService
+
+
+class RealGrokVideoService:
+    def __init__(self, *, settings: dict):
+        self.settings = settings if isinstance(settings, dict) else {}
+
+        self.server_url: str = str(
+            self.settings.get("server_url", "https://yunwu.ai")
+        ).rstrip("/")
+        self.api_key: str = str(self.settings.get("api_key", "")).strip()
+        self.model: str = (
+            str(self.settings.get("model", "grok-videos")).strip()
+            or "grok-videos"
+        )
+
+        self.timeout_seconds: int = _clamp_int(
+            self.settings.get("timeout_seconds", 300), default=300, min_value=60, max_value=3600
+        )
+        self.polling_interval: int = _clamp_int(
+            self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
+        )
+        self.retry_delay: int = _clamp_int(
+            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+        )
+
+        self.default_size: str = str(self.settings.get("size", "16:9"))
+        self.default_duration: int = _clamp_int(
+            self.settings.get("duration", 6), default=6, min_value=2, max_value=12
+        )
+
+        self.create_url = urljoin(self.server_url + "/", "v1/videos")
+        self.query_url = urljoin(self.server_url + "/", "v1/video/query")
+
+        logger.info("[RealGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
+
+    async def generate_video_url(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        preset: str | None = None,
+        **kwargs
+    ) -> str:
+        if not self.api_key:
+            raise RuntimeError("Missing API key")
+
+        if not prompt.strip():
+            raise ValueError("缺少提示词")
+
+        duration = kwargs.get("duration", self.default_duration)
+        size = kwargs.get("size", self.default_size)
+
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
+
+        data = {
+            "model": (None, self.model),
+            "prompt": (None, prompt),
+            "seconds": (None, str(duration)),
+            "size": (None, size),
+        }
+        if image_bytes:
+            data["input_reference"] = ("image.png", image_bytes, "image/png")
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.post(self.create_url, files=data, headers=headers)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
+
+        result = resp.json()
+        task_id = result.get("id")
+        if not task_id:
+            raise RuntimeError("响应中无 task id")
+        logger.info(f"[RealGrok] 任务创建: {task_id}")
+
+        t_start = time.perf_counter()
+        while True:
+            if time.perf_counter() - t_start > self.timeout_seconds:
+                raise TimeoutError(f"任务超时 ({self.timeout_seconds}s)")
+
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                q_resp = await client.get(
+                    self.query_url, params={"id": task_id}, headers=headers
+                )
+            q_data = q_resp.json()
+            status = q_data.get("status")
+
+            if status == "completed" or status == "succeeded":
+                video_url = q_data.get("video_url")
+                if video_url:
+                    return video_url
+                raise RuntimeError("任务完成但无 video_url")
+            elif status == "failed":
+                raise RuntimeError(f"任务失败: {q_data}")
+            else:
+                await asyncio.sleep(self.polling_interval)
