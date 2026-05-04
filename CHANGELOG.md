@@ -1,3 +1,15 @@
+### v1.3.5
+
+**🚀 新功能：假Grok 视频提供商（grok-video-3）**
+
+* 新增 FakeGrokVideoService：基于 Yunwu API grok-video-3 模型，JSON 接口，支持 aspect_ratio/size/images 参数
+* _conf_schema.json 新增 yunwu_grok_video_3 模板
+
+**🔧 优化：精简提供商模板**
+
+* 删除 9 个不用的提供商模板：Gemini 原生 / Flow2API（出图）/ Vertex 匿名 / Grok Images / Grok Chat / Grok2API Images / Gemini Chat 图 / Flow2API（视频）/ 魔搭 Images
+* provider_registry.py 清理 _TEMPLATE_KEY_ALIASES 无用别名
+
 ### v1.3.4
 
 **🚀 新功能：真Grok 视频提供商（Yunwu API）**

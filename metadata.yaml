@@ -2,6 +2,6 @@ name: astrbot_plugin_aiimg
 display_name: AiImg · 万象绘
 desc: >
   多服务商文生图/改图/自拍参考照/视频生成插件；支持 LLM 工具调用、指令调用、预设提示词、多 Key 轮询、失败重试与超时配置。
-version: 1.3.4
+version: 1.3.5
 author: Inoryu7z
 repo: https://github.com/Inoryu7z/astrbot_plugin_aiimg
