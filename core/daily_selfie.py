@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import re
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -781,15 +782,19 @@ class DailySelfieService:
     ) -> str:
         persona_system_prompt = self._get_persona_system_prompt(persona_name)
 
-        data_uris: list[str] = []
+        tmp_dir = Path(tempfile.gettempdir()) / "aiimg_qzone"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        caption_image_paths: list[str] = []
         for p in image_paths[:9]:
             try:
+                tmp_file = tmp_dir / f"qzone_{persona_name}_{p.stem}{p.suffix or '.jpg'}"
                 img_bytes = await asyncio.to_thread(p.read_bytes)
-                b64 = base64.b64encode(img_bytes).decode("utf-8")
-                data_uris.append(f"data:image/jpeg;base64,{b64}")
+                await asyncio.to_thread(tmp_file.write_bytes, img_bytes)
+                caption_image_paths.append(str(tmp_file))
             except Exception as e:
                 logger.warning(
-                    "[DailySelfie] 图片 base64 编码失败: %s, err=%s", p, e
+                    "[DailySelfie] 准备配文图片失败: %s, err=%s", p, e
                 )
 
         user_prompt = (
@@ -803,7 +808,7 @@ class DailySelfieService:
                 self.plugin.context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=user_prompt,
-                    image_urls=data_uris if data_uris else None,
+                    image_urls=caption_image_paths if caption_image_paths else None,
                     system_prompt=persona_system_prompt,
                 ),
                 timeout=120,
