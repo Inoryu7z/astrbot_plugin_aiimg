@@ -727,3 +727,105 @@ class RealGrokVideoService:
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
                     logger.info(f"[RealGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
                 await asyncio.sleep(self.polling_interval)
+
+
+class FakeGrokVideoService:
+    def __init__(self, *, settings: dict):
+        self.settings = settings if isinstance(settings, dict) else {}
+
+        self.server_url: str = str(
+            self.settings.get("server_url", "https://yunwu.ai")
+        ).rstrip("/")
+        self.api_key: str = str(self.settings.get("api_key", "")).strip()
+        self.model: str = (
+            str(self.settings.get("model", "grok-video-3")).strip()
+            or "grok-video-3"
+        )
+
+        self.timeout_seconds: int = _clamp_int(
+            self.settings.get("timeout_seconds", 900), default=900, min_value=60, max_value=3600
+        )
+        self.polling_interval: int = _clamp_int(
+            self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
+        )
+        self.retry_delay: int = _clamp_int(
+            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+        )
+
+        self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "16:9"))
+        self.default_size: str = str(self.settings.get("size", "720P"))
+
+        self.create_url = urljoin(self.server_url + "/", "v1/video/create")
+        self.query_url = urljoin(self.server_url + "/", "v1/video/query")
+
+        logger.info("[FakeGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
+
+    async def generate_video_url(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        preset: str | None = None,
+        **kwargs
+    ) -> str:
+        if not self.api_key:
+            raise RuntimeError("Missing API key")
+
+        if not prompt.strip():
+            raise ValueError("缺少提示词")
+
+        aspect_ratio = kwargs.get("aspect_ratio", self.default_aspect_ratio)
+        size = kwargs.get("size", self.default_size)
+        image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
+
+        body: dict = {
+            "model": self.model,
+            "prompt": prompt,
+            "aspect_ratio": aspect_ratio,
+            "size": size,
+        }
+        if image_url:
+            body["images"] = [image_url]
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.post(self.create_url, json=body, headers=headers)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
+
+        result = resp.json()
+        task_id = result.get("id")
+        if not task_id:
+            raise RuntimeError("响应中无 task id")
+        logger.info(f"[FakeGrok] 任务创建: {task_id}")
+
+        t_start = time.perf_counter()
+        while True:
+            if time.perf_counter() - t_start > self.timeout_seconds:
+                raise TimeoutError(f"任务超时 ({self.timeout_seconds}s)")
+
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                q_resp = await client.get(
+                    self.query_url, params={"id": task_id}, headers=headers
+                )
+            q_data = q_resp.json()
+            status = q_data.get("status")
+
+            if status == "completed" or status == "succeeded":
+                video_url = q_data.get("video_url")
+                if video_url:
+                    logger.info(f"[FakeGrok] 任务完成: {task_id}")
+                    return video_url
+                raise RuntimeError("任务完成但无 video_url")
+            elif status == "failed":
+                raise RuntimeError(f"任务失败: {q_data}")
+            else:
+                if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
+                    logger.info(f"[FakeGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
+                await asyncio.sleep(self.polling_interval)

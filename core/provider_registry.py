@@ -12,7 +12,7 @@ from .gitee_edit import GiteeEditBackend
 from .gitee_sizes import GITEE_SUPPORTED_SIZES, normalize_size_text
 from .grok2api_images_backend import Grok2ApiImagesBackend
 from .grok_images_backend import GrokImagesBackend
-from .grok_video_service import GrokVideoService, RealGrokVideoService
+from .grok_video_service import GrokVideoService, RealGrokVideoService, FakeGrokVideoService
 from .jimeng_api_backend import JimengApiBackend
 from .openai_chat_image_backend import OpenAIChatImageBackend
 from .openai_compat_backend import OpenAICompatBackend
@@ -44,14 +44,10 @@ def _is_http_url(value: Any) -> bool:
 
 _TEMPLATE_KEY_ALIASES: dict[str, str] = {
     "gitee": "gitee_images",
-    "grok": "grok_images",
-    "grok2api": "grok2api_images",
     "grok2api_video": "grok2api_video",
     "openai": "openai_images",
     "openai_compat": "openai_images",
     "openai_full_url": "openai_full_url_images",
-    "gemini_openai": "gemini_openai_images",
-    "modelscope": "modelscope_openai_images",
 }
 
 
@@ -533,6 +529,8 @@ class ProviderRegistry:
             backend: object = GrokVideoService(settings=p)
         elif template_key == "yunwu_grok_video":
             backend: object = RealGrokVideoService(settings=p)
+        elif template_key == "yunwu_grok_video_3":
+            backend: object = FakeGrokVideoService(settings=p)
         elif template_key == "grok2api_video":
             from .grok2api_video_service import Grok2ApiVideoService
             backend = Grok2ApiVideoService(settings=p)
