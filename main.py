@@ -2599,9 +2599,9 @@ class GiteeAIImagePlugin(Star):
         user_prompt = (prompt or "").strip() or "日常自拍照"
         if extra_refs > 0:
             return (
-                f"{prefix}\n\n用户要求：{user_prompt}\n（额外参考图数量：{extra_refs}）"
+                f"{prefix}\n\n{user_prompt}\n（额外参考图数量：{extra_refs}）"
             )
-        return f"{prefix}\n\n用户要求：{user_prompt}"
+        return f"{prefix}\n\n{user_prompt}"
 
     def _get_persona_selfie_chain(self, persona_name: str) -> list[dict] | None:
         """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的链路"""
