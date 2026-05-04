@@ -1604,6 +1604,94 @@
           }
         }
       },
+      "yunwu_grok_video": {
+        "name": "真 Grok（视频）",
+        "description": "基于 Yunwu API 的真 Grok 视频生成（Image-to-Video / Text-to-Video）。",
+        "hint": "仅对 features.video.chain 生效。需要 Yunwu API Key。",
+        "items": {
+          "id": {
+            "type": "string",
+            "description": "服务商 ID（唯一）",
+            "default": "yunwu_grok_video"
+          },
+          "label": {
+            "type": "string",
+            "description": "显示名称（可选）",
+            "default": ""
+          },
+          "server_url": {
+            "type": "string",
+            "description": "API 服务地址",
+            "hint": "默认：https://yunwu.ai",
+            "default": "https://yunwu.ai"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API Key",
+            "default": "",
+            "obvious_hint": true
+          },
+          "model": {
+            "type": "string",
+            "description": "模型名称",
+            "default": "grok-videos"
+          },
+          "timeout_seconds": {
+            "type": "int",
+            "description": "任务超时(秒)",
+            "slider": {
+              "min": 60,
+              "max": 3600,
+              "step": 30
+            },
+            "default": 300
+          },
+          "polling_interval": {
+            "type": "int",
+            "description": "轮询间隔(秒)",
+            "slider": {
+              "min": 2,
+              "max": 30,
+              "step": 2
+            },
+            "default": 10
+          },
+          "retry_delay": {
+            "type": "int",
+            "description": "重试间隔(秒)",
+            "slider": {
+              "min": 0,
+              "max": 60,
+              "step": 1
+            },
+            "default": 2
+          },
+          "size": {
+            "type": "string",
+            "description": "视频宽高比",
+            "options": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "21:9"
+            ],
+            "default": "16:9"
+          },
+          "duration": {
+            "type": "int",
+            "description": "视频时长(秒)",
+            "hint": "Grok 视频支持 2~12 秒。",
+            "slider": {
+              "min": 2,
+              "max": 12,
+              "step": 1
+            },
+            "default": 6
+          }
+        }
+      },
       "flow2api_video": {
         "name": "Flow2API（视频）",
         "description": "用于视频生成链路（通过 /v1/chat/completions 流式输出视频 URL）。",
