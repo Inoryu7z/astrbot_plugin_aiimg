@@ -724,5 +724,6 @@ class RealGrokVideoService:
             elif status == "failed":
                 raise RuntimeError(f"任务失败: {q_data}")
             else:
-                logger.debug(f"[RealGrok] 轮询中: task={task_id}, status={status}")
+                if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
+                    logger.info(f"[RealGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
                 await asyncio.sleep(self.polling_interval)
