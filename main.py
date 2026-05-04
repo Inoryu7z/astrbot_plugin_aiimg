@@ -20,6 +20,8 @@ from typing import Any
 
 import mcp
 
+import httpx
+
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import (
@@ -1519,11 +1521,12 @@ class GiteeAIImagePlugin(Star):
             await self._end_user_job(user_id, kind="image")
 
     @filter.llm_tool(name="aiimg_video")
-    async def aiimg_video(self, event: AstrMessageEvent, prompt: str):
+    async def aiimg_video(self, event: AstrMessageEvent, prompt: str, image_url: str = ""):
         """根据用户发送/引用的图片生成视频。
 
         Args:
             prompt(string): 视频提示词。支持 "预设名 额外提示词"（与 `/视频 预设名 额外提示词` 一致）
+            image_url(string): 可选。如果通过 aiimg_generate 等工具生成了图片，将其返回的图片地址传入此处，即可基于该图片生成视频。留空则使用当前消息中的图片。
         """
         vconf = self._get_feature("video")
         if not bool(vconf.get("enabled", False)):
@@ -1571,6 +1574,7 @@ class GiteeAIImagePlugin(Star):
                     user_id,
                     provider_id=provider_override,
                     llm_tool_failure=True,
+                    image_url=image_url,
                 )
             )
         except Exception:
@@ -1972,30 +1976,48 @@ class GiteeAIImagePlugin(Star):
             *,
             provider_id: str | None = None,
             llm_tool_failure: bool = False,
+            image_url: str = "",
     ) -> None:
         try:
-            image_segs = await get_images_from_event(
-                event,
-                include_avatar=True,
-                include_sender_avatar_fallback=False,
-            )
-            had_image = bool(image_segs)
             image_bytes: bytes | None = None
-            for i, seg in enumerate(image_segs):
-                try:
-                    b64 = await seg.convert_to_base64()
-                    image_bytes = base64.b64decode(b64)
-                    break
-                except Exception as e:
-                    logger.warning(f"[视频] 图片 {i + 1} 转换失败，跳过: {e}")
+            if image_url:
+                image_url = image_url.strip()
+                if image_url:
+                    try:
+                        if image_url.startswith(("http://", "https://")):
+                            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                                resp = await client.get(image_url)
+                                resp.raise_for_status()
+                                image_bytes = resp.content
+                        elif image_url.startswith("file://"):
+                            path = image_url[7:]
+                            image_bytes = await asyncio.to_thread(lambda: open(path, "rb").read())
+                        else:
+                            image_bytes = await asyncio.to_thread(lambda: open(image_url, "rb").read())
+                    except Exception as e:
+                        logger.warning(f"[视频] 读取 image_url 失败: {e}")
 
-            # 允许文生视频（无图）走支持的后端；但若用户确实发了图却读不到，则直接失败
-            if had_image and not image_bytes:
-                if llm_tool_failure:
-                    await self._signal_llm_tool_failure(event)
-                else:
-                    await mark_failed(event)
-                return
+            if not image_bytes:
+                image_segs = await get_images_from_event(
+                    event,
+                    include_avatar=True,
+                    include_sender_avatar_fallback=False,
+                )
+                had_image = bool(image_segs)
+                for i, seg in enumerate(image_segs):
+                    try:
+                        b64 = await seg.convert_to_base64()
+                        image_bytes = base64.b64decode(b64)
+                        break
+                    except Exception as e:
+                        logger.warning(f"[视频] 图片 {i + 1} 转换失败，跳过: {e}")
+
+                if had_image and not image_bytes:
+                    if llm_tool_failure:
+                        await self._signal_llm_tool_failure(event)
+                    else:
+                        await mark_failed(event)
+                    return
 
             t_start = time.perf_counter()
             candidates = (

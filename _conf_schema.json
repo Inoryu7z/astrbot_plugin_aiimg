@@ -1484,9 +1484,9 @@
         }
       },
       "grok_video": {
-        "name": "Grok（视频）",
-        "description": "用于视频生成链路（Image-to-Video）。",
-        "hint": "仅对 features.video.chain 生效；图片生成/改图请用其它模板。",
+        "name": "豆包 Seedance（视频）",
+        "description": "豆包 Seedance 视频生成（Image-to-Video / Text-to-Video）。",
+        "hint": "仅对 features.video.chain 生效。支持 Seedance 1.5 Pro。",
         "items": {
           "id": {
             "type": "string",
@@ -1501,8 +1501,8 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "默认：https://api.x.ai（内部补全 /v1/chat/completions）",
-            "default": "https://api.x.ai"
+            "hint": "默认：https://ark.cn-beijing.volces.com",
+            "default": "https://ark.cn-beijing.volces.com"
           },
           "api_key": {
             "type": "string",
@@ -1513,17 +1513,17 @@
           "model": {
             "type": "string",
             "description": "模型 ID",
-            "default": "grok-imagine-0.9"
+            "default": "doubao-seedance-1-5-pro-251215"
           },
           "timeout_seconds": {
             "type": "int",
-            "description": "请求超时(秒)",
+            "description": "任务超时(秒)",
             "slider": {
-              "min": 1,
+              "min": 60,
               "max": 3600,
-              "step": 10
+              "step": 30
             },
-            "default": 180
+            "default": 300
           },
           "max_retries": {
             "type": "int",
@@ -1533,27 +1533,74 @@
               "max": 5,
               "step": 1
             },
-            "default": 2
+            "default": 1
           },
-          "empty_response_retry": {
+          "polling_interval": {
             "type": "int",
-            "description": "无视频URL重试次数",
+            "description": "轮询间隔(秒)",
             "slider": {
-              "min": 0,
-              "max": 10,
-              "step": 1
+              "min": 2,
+              "max": 30,
+              "step": 2
             },
-            "default": 2
+            "default": 10
           },
           "retry_delay": {
             "type": "int",
-            "description": "重试基础间隔(秒)",
+            "description": "重试间隔(秒)",
             "slider": {
               "min": 0,
-              "max": 30,
+              "max": 60,
               "step": 1
             },
             "default": 2
+          },
+          "ratio": {
+            "type": "string",
+            "description": "视频宽高比",
+            "hint": "adaptive=根据图片自动适配。文生视频场景建议手动指定。",
+            "options": [
+              "16:9",
+              "4:3",
+              "1:1",
+              "3:4",
+              "9:16",
+              "21:9",
+              "adaptive"
+            ],
+            "default": "adaptive"
+          },
+          "duration": {
+            "type": "int",
+            "description": "视频时长(秒)",
+            "hint": "Seedance 1.5 Pro 支持 2~12 秒。",
+            "slider": {
+              "min": 2,
+              "max": 12,
+              "step": 1
+            },
+            "default": 5
+          },
+          "resolution": {
+            "type": "string",
+            "description": "视频分辨率",
+            "options": [
+              "480p",
+              "720p",
+              "1080p"
+            ],
+            "default": "720p"
+          },
+          "watermark": {
+            "type": "bool",
+            "description": "添加水印",
+            "default": false
+          },
+          "generate_audio": {
+            "type": "bool",
+            "description": "生成音频（Seedance 1.5 Pro）",
+            "hint": "开启后模型会基于提示词自动生成人声、音效及背景音乐。",
+            "default": false
           }
         }
       },
