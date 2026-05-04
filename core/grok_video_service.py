@@ -678,6 +678,7 @@ class RealGrokVideoService:
 
         duration = kwargs.get("duration", self.default_duration)
         size = kwargs.get("size", self.default_size)
+        image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
@@ -688,8 +689,8 @@ class RealGrokVideoService:
             "seconds": (None, str(duration)),
             "size": (None, size),
         }
-        if image_bytes:
-            data["input_reference"] = ("image.png", image_bytes, "image/png")
+        if image_url:
+            data["input_reference"] = (None, image_url)
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.post(self.create_url, files=data, headers=headers)
