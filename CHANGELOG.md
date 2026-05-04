@@ -1,3 +1,13 @@
+### v1.3.4
+
+** 新功能：真Grok 视频提供商（Yunwu API）**
+
+* 新增 RealGrokVideoService：基于 Yunwu API 的真 Grok 视频生成（图生视频/文生视频），异步轮询模式
+* _conf_schema.json 新增 yunwu_grok_video 模板：支持时长(2-12s)、宽高比(16:9/9:16/1:1/4:3/3:4/21:9)、超时、轮询间隔等配置
+* provider_registry.py 注册 yunwu_grok_video 模板，绑定到 RealGrokVideoService
+* _async_generate_video 透传 image_url 给后端，支持 LLM 传图片 URL 做图生视频
+* 修复 input_reference 格式：Yunwu API 只接受 URL 字符串，不支持文件上传
+
 ### v1.3.3
 
 ** 优化：补拍搜图收紧 + 无参考图自由发挥**
