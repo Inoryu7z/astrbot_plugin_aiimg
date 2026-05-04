@@ -2036,7 +2036,7 @@ class GiteeAIImagePlugin(Star):
                 try:
                     backend = self.registry.get_video_backend(pid)
                     candidate_url = await backend.generate_video_url(
-                        prompt=prompt, image_bytes=image_bytes
+                        prompt=prompt, image_bytes=image_bytes, image_url=image_url
                     )
                     candidate_url = str(candidate_url or "").strip()
                     if not candidate_url:
