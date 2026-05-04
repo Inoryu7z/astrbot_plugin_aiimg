@@ -643,7 +643,7 @@ class RealGrokVideoService:
         )
 
         self.timeout_seconds: int = _clamp_int(
-            self.settings.get("timeout_seconds", 300), default=300, min_value=60, max_value=3600
+            self.settings.get("timeout_seconds", 900), default=900, min_value=60, max_value=3600
         )
         self.polling_interval: int = _clamp_int(
             self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
@@ -718,9 +718,11 @@ class RealGrokVideoService:
             if status == "completed" or status == "succeeded":
                 video_url = q_data.get("video_url")
                 if video_url:
+                    logger.info(f"[RealGrok] 任务完成: {task_id}")
                     return video_url
                 raise RuntimeError("任务完成但无 video_url")
             elif status == "failed":
                 raise RuntimeError(f"任务失败: {q_data}")
             else:
+                logger.debug(f"[RealGrok] 轮询中: task={task_id}, status={status}")
                 await asyncio.sleep(self.polling_interval)
