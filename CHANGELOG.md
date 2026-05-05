@@ -1,3 +1,14 @@
+### v1.4.0
+
+** 重要修复：LLM引用图片生成视频全部失败**
+
+* 修复 _async_generate_video 中 image_url 为非远程链接时未转为 data URL 的 bug
+* 当 LLM 传入本地路径作为 image_url 时，能读取 bytes 但路径传给 API 服务器导致失败
+* RealGrok: 「图片上传失败」/ FakeGrok: 「illegal base64 data」
+* 修复方案：非 http/https 的 URL 自动从 image_bytes 构建 data URL
+* 双层防御：入口层(_async_generate_video) + 后端层(各 service)
+* 优化压缩函数：压缩后比原始大时返回原始，避免无谓的体积膨胀
+
 ### v1.3.9
 
 ** 新功能：自拍可禁用衣橱参考图**

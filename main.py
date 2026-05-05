@@ -2060,11 +2060,11 @@ class GiteeAIImagePlugin(Star):
                     except Exception as e:
                         logger.warning(f"[视频] 图片 {i + 1} 转换失败，跳过: {e}")
 
-                if image_bytes and not image_url:
+                if image_bytes and (not image_url or not image_url.startswith(("http://", "https://"))):
                     from .core.grok_video_service import _build_data_url
                     image_url = _build_data_url(image_bytes)
                     logger.info(
-                        "[视频] image_url 为空，已从 image_bytes 构建 data URL: "
+                        "[视频] image_url 非远程链接，已从 image_bytes 构建 data URL: "
                         "size=%s bytes, data URL 长度=%s",
                         len(image_bytes),
                         len(image_url),
