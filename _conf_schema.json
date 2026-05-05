@@ -1368,6 +1368,35 @@
             "default": "720P"
           }
         }
+      },
+      "truegrok": {
+        "name": "True Grok（级联）",
+        "description": "级联视频模板：按顺序尝试多个视频服务商，失败自动切换下一个。",
+        "hint": "典型用法：真Grok(便宜/不稳定) → 假Grok(贵/稳定)，省钱同时保成功。",
+        "items": {
+          "id": {
+            "type": "string",
+            "description": "服务商 ID（唯一）",
+            "default": "truegrok"
+          },
+          "label": {
+            "type": "string",
+            "description": "显示名称（可选）",
+            "default": "True Grok"
+          },
+          "kind": {
+            "type": "string",
+            "description": "类型（固定为 video）",
+            "default": "video",
+            "options": ["video"]
+          },
+          "fallback_chain": {
+            "type": "list",
+            "description": "级联服务商 ID 列表（最多3个，按顺序尝试）",
+            "hint": "填已配置的视频服务商 ID，如 [\"real_grok\", \"fake_grok\"]",
+            "default": []
+          }
+        }
       }
     }
   }
