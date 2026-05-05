@@ -485,7 +485,7 @@ class GrokVideoService:
                 try:
                     logger.info(
                         f"[GrokVideo] 调用 API attempt={attempt + 1}/{self.max_retries + 1}, "
-                        f"prompt={final_prompt[:60]}..."
+                        f"prompt={final_prompt}"
                     )
                     return await _request_once()
                 except Exception as e:
@@ -739,11 +739,13 @@ class RealGrokVideoService:
             original_bytes_size = len(image_bytes)
             image_bytes = _compress_image_bytes_for_video(image_bytes)
             if not image_url:
+                image_url = _build_data_url(image_bytes)
                 logger.info(
-                    "[RealGrok] image_url 为空，使用压缩后 bytes 作为 input_reference: "
-                    "%s -> %s bytes",
+                    "[RealGrok] image_url 为空，使用压缩后 bytes 构建 data URL 作为 input_reference: "
+                    "%s -> %s bytes, data_url 长度=%s",
                     original_bytes_size,
                     len(image_bytes),
+                    len(image_url),
                 )
             else:
                 logger.info(
@@ -962,11 +964,11 @@ class TrueGrokVideoService:
             try:
                 backend = self._registry.get_video_backend(pid)
                 logger.info(
-                    "[TrueGrok] 尝试 %s/%s: %s (prompt=%s...)",
+                    "[TrueGrok] 尝试 %s/%s: %s (prompt=%s)",
                     i + 1,
                     total,
                     pid,
-                    prompt[:30],
+                    prompt,
                 )
                 result = await backend.generate_video_url(
                     prompt=prompt,
