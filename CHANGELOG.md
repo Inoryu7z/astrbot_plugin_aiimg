@@ -1,3 +1,13 @@
+### v1.3.7
+
+** 新功能：provider_id 快捷命令**
+
+* 支持 /provider_id prompt 格式：直接用服务商ID作为命令，自动路由到对应功能
+* 图片类 provider  自动转为 /aiedit @provider_id（图生图/改图）
+* 视频类 provider  自动转为 /视频 @provider_id（视频生成）
+* 原有命令（/aiedit、/视频 等）不受影响，完全共存
+* 基于高优先级消息拦截器（priority=100）透明翻译，零侵入现有逻辑
+
 ### v1.3.6
 
 ** 新功能：LLM 可指定视频后端**
