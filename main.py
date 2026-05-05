@@ -1928,7 +1928,7 @@ class GiteeAIImagePlugin(Star):
                 )
                 await asyncio.wait_for(
                     event.send(
-                        event.chain_result([Video.fromFileSystem(str(video_path))])
+                        event.chain_result([Video(file=str(video_path), path=str(video_path))])
                     ),
                     timeout=float(send_timeout),
                 )
@@ -2008,6 +2008,10 @@ class GiteeAIImagePlugin(Star):
                     try:
                         b64 = await seg.convert_to_base64()
                         image_bytes = base64.b64decode(b64)
+                        if not image_url:
+                            seg_url = str(getattr(seg, "url", "") or "").strip()
+                            if seg_url:
+                                image_url = seg_url
                         break
                     except Exception as e:
                         logger.warning(f"[视频] 图片 {i + 1} 转换失败，跳过: {e}")
