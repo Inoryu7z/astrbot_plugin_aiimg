@@ -2490,12 +2490,31 @@ class GiteeAIImagePlugin(Star):
 
         await mark_success(event)
 
-        mode = self._get_image_context_mode()
+        if mode == "selfie":
+            try:
+                persona_name = await self._get_current_persona_name(event)
+                if persona_name:
+                    for idx in [1, 2]:
+                        conf = self._get_selfie_persona_config(idx)
+                        if not conf:
+                            continue
+                        conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+                        if conf_persona != persona_name:
+                            continue
+                        pid = str(conf.get("daily_selfie_provider_id", "") or "").strip()
+                        if pid:
+                            await self.daily_selfie.counter.increment(pid)
+                            logger.info("[aiimg_generate] 自拍计数+1: persona=%s provider=%s", persona_name, pid)
+                        break
+            except Exception as e:
+                logger.warning("[aiimg_generate] 自拍计数失败: %s", e)
 
-        if mode == "none":
+        ctx_mode = self._get_image_context_mode()
+
+        if ctx_mode == "none":
             return None
 
-        if mode == "text":
+        if ctx_mode == "text":
             return self._build_llm_tool_text_desc_result(prompt)
 
         await self._ensure_tool_image_cache_dir()

@@ -1,3 +1,16 @@
+### v1.4.2
+
+**🐛 重要修复：LLM自拍不计入补画额度**
+
+* 修复 aiimg_generate(mode=selfie_ref) 生成的自拍不计入 DailyQuotaCounter 的恶性 bug
+* 根因：早期 on_provider_request 回调被删除后，LLM自拍路径遗漏了 counter.increment()
+* 修复 _finalize_llm_tool_image 中 mode 变量被覆盖的问题（生成模式 vs 上下文模式）
+
+**🐛 修复 wardrobe_preview 返回文本双句号**
+
+* result_text 末尾句号与 _build_llm_tool_text_desc_result 追加的句号拼接成双句号
+* 优化指引文字：加 skill 调用提醒，序号改为参考图
+
 ### v1.4.1
 
 **🐛 修复：生图工具能看到视频后端名称**
