@@ -1928,7 +1928,7 @@ class GiteeAIImagePlugin(Star):
                 )
                 await asyncio.wait_for(
                     event.send(
-                        event.chain_result([Video(file=str(video_path), path=str(video_path))])
+                        event.chain_result([Video(file=f"file://{str(video_path)}", path=str(video_path))])
                     ),
                     timeout=float(send_timeout),
                 )
