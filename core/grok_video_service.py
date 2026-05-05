@@ -73,6 +73,14 @@ def _compress_image_bytes_for_video(
             im.save(buf, format="JPEG", quality=quality, optimize=True)
             compressed = buf.getvalue()
 
+            if len(compressed) >= original_size:
+                logger.info(
+                    "[compress_video] 压缩后未减小，使用原始图片: %s -> %s bytes",
+                    original_size,
+                    len(compressed),
+                )
+                return image_bytes
+
             logger.info(
                 "[compress_video] 图片压缩完成: %s -> %s, %s -> %s bytes",
                 original_dims,
@@ -753,7 +761,7 @@ class RealGrokVideoService:
             "seconds": (None, str(duration)),
             "size": (None, size),
         }
-        if image_url:
+        if image_url and image_url.startswith(("http://", "https://")):
             data["input_reference"] = (None, image_url)
             logger.info("[RealGrok] 附带参考图: image_url 长度=%s", len(image_url))
         elif image_bytes:
@@ -851,10 +859,10 @@ class FakeGrokVideoService:
         if image_bytes:
             original_bytes_size = len(image_bytes)
             image_bytes = _compress_image_bytes_for_video(image_bytes)
-            if not image_url:
+            if not image_url or not image_url.startswith(("http://", "https://")):
                 image_url = _build_data_url(image_bytes)
                 logger.info(
-                    "[FakeGrok] image_url 为空，已从 image_bytes 构建 data URL: "
+                    "[FakeGrok] image_url 非远程链接，已从 image_bytes 构建 data URL: "
                     "原始=%s bytes, 压缩后=%s bytes, data URL 长度=%s",
                     original_bytes_size,
                     len(image_bytes),
