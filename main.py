@@ -1709,9 +1709,9 @@ class GiteeAIImagePlugin(Star):
         result_text = (
             f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
             f"{description}\n\n{hint}\n\n"
-            f"请根据以上描述构建自拍提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
+            f"请根据以上描述构建自拍提示词，如果未调用对应的自拍skill那么现在立刻调用（已经调用则可忽略）。然后调用 aiimg_generate(mode=selfie_ref)。"
             f"这张参考图的序号为{wardrobe_ref_index}，会自动作为额外参考图传入。"
-            f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用序号{wardrobe_ref_index}来引用该参考图。"
+            f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
         )
         return self._build_llm_tool_text_desc_result(result_text)
 
