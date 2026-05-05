@@ -1521,12 +1521,13 @@ class GiteeAIImagePlugin(Star):
             await self._end_user_job(user_id, kind="image")
 
     @filter.llm_tool(name="aiimg_video")
-    async def aiimg_video(self, event: AstrMessageEvent, prompt: str, image_url: str = ""):
+    async def aiimg_video(self, event: AstrMessageEvent, prompt: str, image_url: str = "", backend: str = "auto"):
         """根据用户发送/引用的图片生成视频。
 
         Args:
             prompt(string): 视频提示词。支持 "预设名 额外提示词"（与 `/视频 预设名 额外提示词` 一致）
             image_url(string): 可选。如果通过 aiimg_generate 等工具生成了图片，将其返回的图片地址传入此处，即可基于该图片生成视频。留空则使用当前消息中的图片。
+            backend(string): auto=自动选择。可选值见下方列表，填显示名称或服务商ID均可。除非用户明确要求使用特定后端，否则永远填auto。
         """
         vconf = self._get_feature("video")
         if not bool(vconf.get("enabled", False)):
@@ -1541,7 +1542,12 @@ class GiteeAIImagePlugin(Star):
             await self._signal_llm_tool_failure(event)
             return self._build_llm_tool_failure_result("请提供视频提示词")
 
-        provider_override, arg = self._parse_provider_override_prefix(arg)
+        b_raw = (backend or "auto").strip()
+        backend_resolved = self.registry.resolve_backend(b_raw)
+        if backend_resolved:
+            provider_override = backend_resolved
+        else:
+            provider_override, arg = self._parse_provider_override_prefix(arg)
         if not arg:
             await self._signal_llm_tool_failure(event)
             return self._build_llm_tool_failure_result("请提供视频提示词")

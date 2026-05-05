@@ -1,3 +1,11 @@
+### v1.3.6
+
+** 新功能：LLM 可指定视频后端**
+
+* aiimg_video 工具新增 backend 参数：LLM 调用时可指定用哪个视频服务商生成视频（填显示名称或 provider_id 均可）
+* 解析逻辑复用 resolve_backend，行为与 aiimg_generate 的 backend 参数完全一致
+* backend=auto（默认）时走全局 video.chain，不影响现有行为
+
 ### v1.3.5
 
 **🚀 新功能：假Grok 视频提供商（grok-video-3）**
