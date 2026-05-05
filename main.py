@@ -24,6 +24,7 @@ import httpx
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event.filter import EventMessageType
 from astrbot.api.message_components import (
     At,
     AtAll,
@@ -69,9 +70,41 @@ class SendImageResult:
 class GiteeAIImagePlugin(Star):
     """Gitee AI 图像生成插件"""
 
-    # Gitee AI 支持的图片比例
     SUPPORTED_RATIOS: dict[str, list[str]] = GITEE_SUPPORTED_RATIOS
     IMAGE_AS_FILE_THRESHOLD_BYTES: int = 20 * 1024 * 1024
+
+    _KNOWN_COMMANDS: set[str] = {
+        "aiedit", "改图", "图生图", "修图", "draw", "aiimg",
+        "文生图", "生图", "画图", "绘图", "出图", "aidraw",
+        "视频", "video", "自拍", "自拍参考", "补画", "补画状态",
+        "重发图片", "预设列表", "视频预设列表", "改图帮助",
+    }
+
+    @filter.event_message_type(EventMessageType.ALL, priority=100)
+    async def _intercept_provider_shortcut(self, event: AstrMessageEvent):
+        if not event.is_at_or_wake_command:
+            return
+        message_str = event.message_str.strip()
+        if not message_str:
+            return
+        parts = message_str.split(maxsplit=1)
+        cmd_word = parts[0]
+        if len(cmd_word) <= 1 or not cmd_word.startswith("/"):
+            return
+        cmd_name = cmd_word[1:]
+        if cmd_name in self._KNOWN_COMMANDS:
+            return
+
+        provider = self.registry.get_provider_by_id(cmd_name)
+        if not provider:
+            return
+
+        arg = parts[1] if len(parts) > 1 else ""
+        provider_kind = getattr(provider, "kind", "image")
+        if provider_kind == "video":
+            event.message_str = f"/视频 @{cmd_name} {arg}".strip()
+        else:
+            event.message_str = f"/aiedit @{cmd_name} {arg}".strip()
 
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
