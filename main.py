@@ -1362,6 +1362,7 @@ class GiteeAIImagePlugin(Star):
             mode: str = "auto",
             backend: str = "auto",
             output: str = "",
+            use_wardrobe: bool = True,
     ):
         """统一图片生成/改图/自拍工具。
 
@@ -1378,6 +1379,7 @@ class GiteeAIImagePlugin(Star):
             mode(string): auto=自动判断, text=文生图, edit=改图, selfie_ref=自拍
             backend(string): auto=自动选择。可选值见下方列表，填显示名称或服务商ID均可。除非用户明确要求使用特定后端，否则永远填auto。
             output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
+            use_wardrobe(boolean): 仅自拍模式生效。是否使用衣橱参考图。除非用户明确说「不用衣橱」「不要衣橱」，否则永远填true。
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
@@ -1435,7 +1437,7 @@ class GiteeAIImagePlugin(Star):
         try:
             await mark_processing(event)
             image_path, result_mode = await self._execute_llm_tool_generate_core(
-                event, prompt, m, target_backend, size, resolution
+                event, prompt, m, target_backend, size, resolution, use_wardrobe
             )
             return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode)
         except Exception as e:
@@ -1453,6 +1455,7 @@ class GiteeAIImagePlugin(Star):
         target_backend: str | None,
         size: str | None,
         resolution: str | None,
+        use_wardrobe: bool = True,
     ) -> tuple[Path, str]:
         if m in {"selfie_ref", "selfie", "ref"}:
             logger.info("[aiimg_generate] route=selfie_ref (explicit)")
@@ -1462,6 +1465,7 @@ class GiteeAIImagePlugin(Star):
                 raise RuntimeError("自拍功能未启用")
             image_path = await self._generate_selfie_image(
                 event, prompt, target_backend, size=size, resolution=resolution,
+                use_wardrobe=use_wardrobe,
             )
             return image_path, "selfie"
 
@@ -1475,6 +1479,7 @@ class GiteeAIImagePlugin(Star):
                     logger.info("[aiimg_generate] route=auto->selfie_ref")
                     image_path = await self._generate_selfie_image(
                         event, prompt, target_backend, size=size, resolution=resolution,
+                        use_wardrobe=use_wardrobe,
                     )
                     return image_path, "selfie"
                 except Exception as e:
@@ -2441,7 +2446,7 @@ class GiteeAIImagePlugin(Star):
     @staticmethod
     def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
-        text = f"发送了一张图片" + (f"：{desc}" if desc else "")
+        text = f"已发送图片给用户" + (f"：{desc}" if desc else "") + "。无需调用 send_message_to_user。"
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
@@ -2449,7 +2454,7 @@ class GiteeAIImagePlugin(Star):
     @staticmethod
     def _build_llm_tool_background_result(prompt: str, mode: str) -> mcp.types.CallToolResult:
         mode_desc = {"text": "文生图", "edit": "改图", "selfie_ref": "自拍", "auto": "图片"}.get(mode, "图片")
-        text = f"正在生成{mode_desc}，完成后会自动发送。请以符合你人设的口吻告知用户图片正在生成中。"
+        text = f"正在生成{mode_desc}，完成后会自动发送给用户，无需调用 send_message_to_user。请以符合你人设的口吻告知用户图片正在生成中。"
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
@@ -2736,6 +2741,7 @@ class GiteeAIImagePlugin(Star):
             *,
             size: str | None = None,
             resolution: str | None = None,
+            use_wardrobe: bool = True,
     ) -> Path:
         persona_name = await self._get_current_persona_name(event)
         if not persona_name:
@@ -2747,7 +2753,7 @@ class GiteeAIImagePlugin(Star):
 
         selfie_conf = self._get_feature("selfie")
         wardrobe_ref_added = False
-        if selfie_conf.get("wardrobe_ref_enabled", False):
+        if use_wardrobe and selfie_conf.get("wardrobe_ref_enabled", False):
             wardrobe = self._get_wardrobe_instance()
             if wardrobe:
                 # 优先使用 aiimg_wardrobe_preview 缓存的结果，避免重复调用 wardrobe
