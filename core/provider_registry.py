@@ -251,9 +251,11 @@ class ProviderRegistry:
     def provider_ids(self) -> list[str]:
         return list(self._providers.keys())
 
-    def provider_labels(self) -> dict[str, str]:
+    def provider_labels(self, kind: str | None = None) -> dict[str, str]:
         out: dict[str, str] = {}
         for pid, conf in self._providers.items():
+            if kind and str(conf.get("kind") or "").strip() != kind:
+                continue
             lbl = str(conf.get("label") or "").strip()
             if lbl:
                 out[pid] = lbl

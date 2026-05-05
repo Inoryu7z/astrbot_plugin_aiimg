@@ -1,3 +1,11 @@
+### v1.4.1
+
+**🐛 修复：生图工具能看到视频后端名称**
+
+* provider_labels() 新增 kind 参数，支持按 image/video 过滤
+* _inject_provider_list_to_tool_doc 分别注入：生图工具只看 image 后端，视频工具只看 video 后端
+* 修复 LLM 用 video 后端名调用 aiimg_generate 的错误
+
 ### v1.4.0
 
 **🐛 重要修复：LLM引用图片生成视频全部失败**

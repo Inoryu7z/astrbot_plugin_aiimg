@@ -199,23 +199,33 @@ class GiteeAIImagePlugin(Star):
         self._inject_provider_list_to_tool_doc()
 
     def _inject_provider_list_to_tool_doc(self):
-        labels = self.registry.provider_labels()
-        if not labels:
-            return
-        entries = []
-        for pid, lbl in labels.items():
-            entries.append(f"- {lbl}")
-        provider_block = (
-            "\n可用后端列表（backend 参数可选值，填显示名称即可）：\n"
-            + "\n".join(entries)
-            + "\n注意：除非用户明确要求使用特定后端（如提到后端名称），否则永远填 auto。"
-        )
+        image_labels = self.registry.provider_labels(kind="image")
+        video_labels = self.registry.provider_labels(kind="video")
+
+        def _build_block(labels: dict[str, str]):
+            entries = []
+            for pid, lbl in labels.items():
+                entries.append(f"- {lbl}")
+            return (
+                "\n可用后端列表（backend 参数可选值，填显示名称即可）：\n"
+                + "\n".join(entries)
+                + "\n注意：除非用户明确要求使用特定后端（如提到后端名称），否则永远填 auto。"
+            )
+
         from astrbot.core.provider.register import llm_tools
-        tool_names = ("aiimg_generate", "aiimg_draw", "aiimg_edit", "aiimg_video")
-        for name in tool_names:
-            func_tool = llm_tools.get_func(name)
+
+        if image_labels:
+            img_block = _build_block(image_labels)
+            for name in ("aiimg_generate", "aiimg_draw", "aiimg_edit"):
+                func_tool = llm_tools.get_func(name)
+                if func_tool and func_tool.description:
+                    func_tool.description += img_block
+
+        if video_labels:
+            vid_block = _build_block(video_labels)
+            func_tool = llm_tools.get_func("aiimg_video")
             if func_tool and func_tool.description:
-                func_tool.description += provider_block
+                func_tool.description += vid_block
 
     def _migrate_legacy_data(self):
         import shutil as _shutil
