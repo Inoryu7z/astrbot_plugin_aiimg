@@ -1,6 +1,6 @@
 ### v1.4.0
 
-** 重要修复：LLM引用图片生成视频全部失败**
+**🐛 重要修复：LLM引用图片生成视频全部失败**
 
 * 修复 _async_generate_video 中 image_url 为非远程链接时未转为 data URL 的 bug
 * 当 LLM 传入本地路径作为 image_url 时，能读取 bytes 但路径传给 API 服务器导致失败
@@ -11,39 +11,39 @@
 
 ### v1.3.9
 
-** 新功能：自拍可禁用衣橱参考图**
+**🚀 新功能：自拍可禁用衣橱参考图**
 
 * aiimg_generate 新增 use_wardrobe 参数：LLM 可控制是否使用衣橱参考图
 * 默认 true（保持现有行为），用户说「不用衣橱」时 LLM 可设为 false
 * 工具描述明确：除非用户明确要求不用，否则永远填 true
 
-** 优化：LLM 返回文本提醒**
+**📝 优化：LLM 返回文本提醒**
 
 * 图片生成返回文本加「无需调用 send_message_to_user」提醒
 * 防止 LLM 在图片已自动发送后重复调用 send 工具
 
 ### v1.3.8
 
-** 新功能：TrueGrok 级联模板**
+**🚀 新功能：TrueGrok 级联模板**
 
 * 新增 TrueGrok 组合模板：配置 fallback_chain 列表（最多3个），按顺序尝试，失败自动切换
-* 典型用法：真Grok(便宜/不稳定)  假Grok(贵/稳定)，省钱同时保成功
+* 典型用法：真Grok(便宜/不稳定) → 假Grok(贵/稳定)，省钱同时保成功
 * 防循环引用：自动跳过链中的自身 provider_id
 * 详细日志记录每个子后端的成败
 
 ### v1.3.7
 
-** 新功能：provider_id 快捷命令**
+**🚀 新功能：provider_id 快捷命令**
 
 * 支持 /provider_id prompt 格式：直接用服务商ID作为命令，自动路由到对应功能
-* 图片类 provider  自动转为 /aiedit @provider_id（图生图/改图）
-* 视频类 provider  自动转为 /视频 @provider_id（视频生成）
+* 图片类 provider → 自动转为 /aiedit @provider_id（图生图/改图）
+* 视频类 provider → 自动转为 /视频 @provider_id（视频生成）
 * 原有命令（/aiedit、/视频 等）不受影响，完全共存
 * 基于高优先级消息拦截器（priority=100）透明翻译，零侵入现有逻辑
 
 ### v1.3.6
 
-** 新功能：LLM 可指定视频后端**
+**🚀 新功能：LLM 可指定视频后端**
 
 * aiimg_video 工具新增 backend 参数：LLM 调用时可指定用哪个视频服务商生成视频（填显示名称或 provider_id 均可）
 * 解析逻辑复用 resolve_backend，行为与 aiimg_generate 的 backend 参数完全一致
