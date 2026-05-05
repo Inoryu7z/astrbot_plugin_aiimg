@@ -764,6 +764,9 @@ class RealGrokVideoService:
         if image_url and image_url.startswith(("http://", "https://")):
             data["input_reference"] = (None, image_url)
             logger.info("[RealGrok] 附带参考图: image_url 长度=%s", len(image_url))
+        elif image_url:
+            data["input_reference"] = (None, image_url)
+            logger.info("[RealGrok] 附带参考图(非HTTP URL): image_url 长度=%s", len(image_url))
         elif image_bytes:
             data["input_reference"] = ("image.jpg", image_bytes, "image/jpeg")
             logger.info("[RealGrok] 附带参考图: 压缩后 bytes 大小=%s", len(image_bytes))
