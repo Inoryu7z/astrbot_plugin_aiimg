@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import random
 import re
@@ -39,6 +40,52 @@ def _build_data_url(image_bytes: bytes) -> str:
     mime = _guess_image_mime(image_bytes)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime};base64,{b64}"
+
+
+def _compress_image_bytes_for_video(
+    image_bytes: bytes, *, max_side: int = 2048, quality: int = 85
+) -> bytes:
+    try:
+        from PIL import Image as PILImage
+    except Exception:
+        logger.warning("[compress_video] PIL 不可用，返回原始图片")
+        return image_bytes
+
+    try:
+        with PILImage.open(io.BytesIO(image_bytes)) as im:
+            original_size = len(image_bytes)
+            original_dims = im.size
+
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+
+            w, h = im.size
+            if max(w, h) > max_side:
+                scale = max_side / max(w, h)
+                nw = max(1, int(w * scale))
+                nh = max(1, int(h * scale))
+                resampling = getattr(
+                    getattr(PILImage, "Resampling", PILImage), "LANCZOS"
+                )
+                im = im.resize((nw, nh), resampling)
+
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=quality, optimize=True)
+            compressed = buf.getvalue()
+
+            logger.info(
+                "[compress_video] 图片压缩完成: %s -> %s, %s -> %s bytes",
+                original_dims,
+                im.size,
+                original_size,
+                len(compressed),
+            )
+            return compressed
+    except Exception as e:
+        logger.warning(
+            "[compress_video] 压缩失败，返回原始图片: %s", e
+        )
+        return image_bytes
 
 
 def _looks_like_proxy_video_url(url: str) -> bool:
@@ -680,6 +727,23 @@ class RealGrokVideoService:
         size = kwargs.get("size", self.default_size)
         image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
 
+        if image_bytes:
+            original_bytes_size = len(image_bytes)
+            image_bytes = _compress_image_bytes_for_video(image_bytes)
+            if not image_url:
+                logger.info(
+                    "[RealGrok] image_url 为空，使用压缩后 bytes 作为 input_reference: "
+                    "%s -> %s bytes",
+                    original_bytes_size,
+                    len(image_bytes),
+                )
+            else:
+                logger.info(
+                    "[RealGrok] 图片已压缩: %s -> %s bytes, 使用传入的 image_url",
+                    original_bytes_size,
+                    len(image_bytes),
+                )
+
         headers = {"Authorization": f"Bearer {self.api_key}"}
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
 
@@ -691,6 +755,12 @@ class RealGrokVideoService:
         }
         if image_url:
             data["input_reference"] = (None, image_url)
+            logger.info("[RealGrok] 附带参考图: image_url 长度=%s", len(image_url))
+        elif image_bytes:
+            data["input_reference"] = ("image.jpg", image_bytes, "image/jpeg")
+            logger.info("[RealGrok] 附带参考图: 压缩后 bytes 大小=%s", len(image_bytes))
+        else:
+            logger.info("[RealGrok] 无参考图，纯文生视频模式")
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.post(self.create_url, files=data, headers=headers)
@@ -778,6 +848,25 @@ class FakeGrokVideoService:
         size = kwargs.get("size", self.default_size)
         image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
 
+        if image_bytes:
+            original_bytes_size = len(image_bytes)
+            image_bytes = _compress_image_bytes_for_video(image_bytes)
+            if not image_url:
+                image_url = _build_data_url(image_bytes)
+                logger.info(
+                    "[FakeGrok] image_url 为空，已从 image_bytes 构建 data URL: "
+                    "原始=%s bytes, 压缩后=%s bytes, data URL 长度=%s",
+                    original_bytes_size,
+                    len(image_bytes),
+                    len(image_url),
+                )
+            else:
+                logger.info(
+                    "[FakeGrok] 图片已压缩: %s -> %s bytes, 使用传入的 image_url",
+                    original_bytes_size,
+                    len(image_bytes),
+                )
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -793,6 +882,9 @@ class FakeGrokVideoService:
         }
         if image_url:
             body["images"] = [image_url]
+            logger.info("[FakeGrok] 附带参考图: image_url 长度=%s", len(image_url))
+        else:
+            logger.info("[FakeGrok] 无参考图，纯文生视频模式")
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.post(self.create_url, json=body, headers=headers)
