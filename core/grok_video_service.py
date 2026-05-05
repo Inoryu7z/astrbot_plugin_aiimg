@@ -921,3 +921,57 @@ class FakeGrokVideoService:
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
                     logger.info(f"[FakeGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
                 await asyncio.sleep(self.polling_interval)
+
+
+class TrueGrokVideoService:
+    def __init__(self, registry, provider: dict):
+        self._registry = registry
+        self.provider_id = str(provider.get("id") or "").strip()
+        self.label = str(provider.get("label") or self.provider_id).strip()
+        raw_chain = provider.get("fallback_chain")
+        if isinstance(raw_chain, list):
+            self.fallback_chain = [str(pid or "").strip() for pid in raw_chain[:3] if pid]
+        else:
+            self.fallback_chain = []
+
+    async def generate_video_url(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        preset: str | None = None,
+        **kwargs
+    ) -> str:
+        if not self.fallback_chain:
+            raise RuntimeError(f"TrueGrok({self.provider_id}): fallback_chain 为空")
+
+        total = len(self.fallback_chain)
+        last_error: Exception | None = None
+        for i, pid in enumerate(self.fallback_chain):
+            if pid == self.provider_id:
+                logger.warning(f"[TrueGrok] 跳过循环引用: {pid}")
+                continue
+            try:
+                backend = self._registry.get_video_backend(pid)
+                logger.info(
+                    "[TrueGrok] 尝试 %s/%s: %s (prompt=%s...)",
+                    i + 1,
+                    total,
+                    pid,
+                    prompt[:30],
+                )
+                result = await backend.generate_video_url(
+                    prompt=prompt,
+                    image_bytes=image_bytes,
+                    preset=preset,
+                    **kwargs,
+                )
+                logger.info("[TrueGrok] 成功: %s", pid)
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning("[TrueGrok] %s 失败, 尝试下一个: %s", pid, e)
+
+        raise RuntimeError(
+            f"TrueGrok({self.provider_id}): 所有 {total} 个后端均失败; 最后错误: {last_error}"
+        ) from last_error

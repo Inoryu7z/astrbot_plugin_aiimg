@@ -119,6 +119,8 @@ class ProviderRegistry:
             return "grok_video"
         if pid in {"flow2api_video"}:
             return "flow2api_video"
+        if isinstance(normalized.get("fallback_chain"), list):
+            return "truegrok"
         return ""
 
     def _load_providers(self) -> None:
@@ -545,6 +547,9 @@ class ProviderRegistry:
                 "proxy_url": p.get("proxy_url", ""),
             }
             backend = Flow2ApiVideoBackend(settings=settings)
+        elif template_key == "truegrok":
+            from .grok_video_service import TrueGrokVideoService
+            backend = TrueGrokVideoService(registry=self, provider=p)
         else:
             raise RuntimeError(f"Provider '{pid}' is not a video provider")
         self._video_backends[pid] = backend
