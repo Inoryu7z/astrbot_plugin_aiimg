@@ -95,12 +95,12 @@ class GiteeAIImagePlugin(Star):
         if cmd_name in self._KNOWN_COMMANDS:
             return
 
-        provider = self.registry.get_provider_by_id(cmd_name)
+        provider = self.registry.get(cmd_name)
         if not provider:
             return
 
         arg = parts[1] if len(parts) > 1 else ""
-        provider_kind = getattr(provider, "kind", "image")
+        provider_kind = str(provider.get("kind", "image") or "image").strip()
         if provider_kind == "video":
             event.message_str = f"/视频 @{cmd_name} {arg}".strip()
         else:
