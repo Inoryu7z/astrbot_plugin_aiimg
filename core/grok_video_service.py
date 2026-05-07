@@ -416,8 +416,8 @@ class GrokVideoService:
         timeout = httpx.Timeout(
             connect=10.0,
             read=float(self.timeout_seconds),
-            write=30.0,
-            pool=float(self.timeout_seconds) + 10.0,
+            write=120.0,
+            pool=float(self.timeout_seconds) + 100.0,
         )
 
         async def _request_once() -> Any:
@@ -629,7 +629,7 @@ class DoubaoSeedanceService:
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
         
         task_id = await self._create_task(payload, headers, timeout)
         return await self._poll_task_result(task_id, headers, timeout)
@@ -753,7 +753,7 @@ class RealGrokVideoService:
                 )
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
 
         data = {
             "model": (None, self.model),
@@ -883,7 +883,7 @@ class FakeGrokVideoService:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=70.0)
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
 
         body: dict = {
             "model": self.model,
