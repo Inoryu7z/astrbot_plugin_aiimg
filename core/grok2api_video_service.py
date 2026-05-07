@@ -86,8 +86,8 @@ class Grok2ApiVideoService:
         timeout = httpx.Timeout(
             connect=10.0,
             read=float(self.timeout_seconds),
-            write=10.0,
-            pool=float(self.timeout_seconds) + 10.0,
+            write=120.0,
+            pool=float(self.timeout_seconds) + 100.0,
         )
 
         async def _request_once() -> Any:

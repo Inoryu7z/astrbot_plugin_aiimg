@@ -1,3 +1,10 @@
+### v1.4.3
+
+🔧 修复：视频后端 WriteTimeout
+
+* 所有视频后端 write timeout 统一增大至 120s（原 30s/10s），解决大图 Base64 data URL 上传超时导致提供商后台收不到请求的问题
+* 覆盖 DoubaoSeedance(豆包)、RealGrok(真Grok)、FakeGrok(假Grok)、Grok2Api 四种后端，确保 TrueGrok 级联 fallback 全路径覆盖
+
 ### v1.4.2
 
 **🐛 重要修复：LLM自拍不计入补画额度**
