@@ -148,6 +148,14 @@ _SKILL_RULES_SYSTEM_PROMPT = (
 )
 
 
+_DAILY_SELFIE_REF_HINT = (
+    "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
+    "不要模仿图4（即本描述指向的图片）的构图和姿势。"
+    "其中，前3张参考图（系统已内置）是你的人设图，"
+    "要使用这张新的参考图，请在提示词中使用参考图4来引用该参考图，"
+)
+
+
 def _build_strength_hint(ref_strength: str) -> str:
     if ref_strength == "full":
         return (
@@ -497,7 +505,7 @@ class DailySelfieService:
             if ref:
                 desc = ref.get("description", "")
                 if desc:
-                    hint = _build_strength_hint("reimagine")
+                    hint = _DAILY_SELFIE_REF_HINT
                     descriptions.append(
                         f"参考图{search_ref_index}描述：{desc}\n\n{hint}\n\n"
                         f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
@@ -793,9 +801,10 @@ class DailySelfieService:
         caption_image_paths: list[str] = []
         for p in image_paths[:9]:
             try:
-                tmp_file = tmp_dir / f"qzone_{persona_name}_{p.stem}{p.suffix or '.jpg'}"
-                img_bytes = await asyncio.to_thread(p.read_bytes)
-                await asyncio.to_thread(tmp_file.write_bytes, img_bytes)
+                tmp_file = tmp_dir / f"qzone_{persona_name}_{p.stem}.jpg"
+                await asyncio.to_thread(
+                    self._compress_image_for_caption, p, tmp_file, 1024, 80
+                )
                 caption_image_paths.append(str(tmp_file))
             except Exception as e:
                 logger.warning(
@@ -808,34 +817,55 @@ class DailySelfieService:
             "禁止使用任何markdown格式、编号、标签、emoji。"
         )
 
-        try:
-            resp = await asyncio.wait_for(
-                self.plugin.context.llm_generate(
-                    chat_provider_id=provider_id,
-                    prompt=user_prompt,
-                    image_urls=caption_image_paths if caption_image_paths else None,
-                    system_prompt=persona_system_prompt,
-                ),
-                timeout=120,
-            )
-            text = (getattr(resp, "completion_text", "") or "").strip()
-            if text:
-                logger.info(
-                    "[DailySelfie] 人格 %s 生成空间配文成功: %s",
-                    persona_name,
-                    text[:50],
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=user_prompt,
+                        image_urls=caption_image_paths if caption_image_paths else None,
+                        system_prompt=persona_system_prompt,
+                    ),
+                    timeout=600,
                 )
-                return text
-        except asyncio.TimeoutError:
-            logger.error(
-                "[DailySelfie] 人格 %s 生成空间配文超时", persona_name
-            )
-        except Exception as e:
-            logger.error(
-                "[DailySelfie] 人格 %s 生成空间配文失败: %s", persona_name, e
-            )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if text:
+                    logger.info(
+                        "[DailySelfie] 人格 %s 生成空间配文成功: %s",
+                        persona_name,
+                        text[:50],
+                    )
+                    return text
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[DailySelfie] 人格 %s 生成空间配文超时(第%d次)", persona_name, attempt + 1
+                )
+                if attempt == 0:
+                    logger.info("[DailySelfie] 人格 %s 将重试一次", persona_name)
+                    continue
+            except Exception as e:
+                logger.warning(
+                    "[DailySelfie] 人格 %s 生成空间配文失败(第%d次): %s", persona_name, attempt + 1, e
+                )
+                if attempt == 0:
+                    logger.info("[DailySelfie] 人格 %s 将重试一次", persona_name)
+                    continue
 
         return ""
+
+    @staticmethod
+    def _compress_image_for_caption(
+        src: Path, dst: Path, max_size: int = 1024, quality: int = 80
+    ) -> None:
+        from PIL import Image as PILImage
+
+        img = PILImage.open(src)
+        img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_size:
+            ratio = max_size / max(w, h)
+            img = img.resize((int(w * ratio), int(h * ratio)), PILImage.LANCZOS)
+        img.save(dst, format="JPEG", quality=quality)
 
     async def _llm_round1(
         self,
