@@ -755,14 +755,15 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s 生成空间配文失败", persona_name)
             return
 
-        image_bytes_list: list[bytes] = []
+        image_path_list: list[str] = []
         for p in image_paths:
             try:
-                image_bytes_list.append(await asyncio.to_thread(p.read_bytes))
+                if p.exists():
+                    image_path_list.append(str(p))
             except Exception as e:
-                logger.warning("[DailySelfie] 读取图片失败: %s, err=%s", p, e)
+                logger.warning("[DailySelfie] 检查图片失败: %s, err=%s", p, e)
 
-        if not image_bytes_list:
+        if not image_path_list:
             return
 
         qzone_star = self.plugin.context.get_registered_star(
@@ -775,7 +776,7 @@ class DailySelfieService:
         qzone_plugin = qzone_star.star_cls
         try:
             await qzone_plugin.service.publish_post(
-                text=caption, images=image_bytes_list
+                text=caption, images=image_path_list
             )
             logger.info(
                 "[DailySelfie] 人格 %s 空间说说发布成功，共 %d 张图",
