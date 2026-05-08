@@ -5,6 +5,7 @@ import base64
 import json
 import re
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -383,7 +384,7 @@ class DailySelfieService:
                     continue
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, remaining, request_interval
+                    p, wardrobe, style_pool, recent_styles, remaining, request_interval, umo
                 )
                 total_success += s
                 total_fail += f
@@ -456,6 +457,7 @@ class DailySelfieService:
         recent_styles: list[str],
         remaining: int,
         request_interval: int,
+        umo: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
         provider_id = persona["provider_id"]
@@ -464,7 +466,7 @@ class DailySelfieService:
 
         logger.info("[DailySelfie] 开始处理人格 %s，剩余额度 %d", persona_name, remaining)
 
-        chat_provider_id = self._get_chat_provider_id()
+        chat_provider_id = self._get_chat_provider_id(umo)
         if not chat_provider_id:
             logger.error("[DailySelfie] 无法获取默认 LLM Provider，跳过人格 %s", persona_name)
             return 0, 0
@@ -490,7 +492,7 @@ class DailySelfieService:
 
         ref_by_query: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
-            if i < len(queries):
+            if ref is not None and i < len(queries):
                 ref_by_query[i] = ref
 
         logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 条查询）", persona_name, len(ref_results), len(queries))
@@ -806,11 +808,11 @@ class DailySelfieService:
         tmp_files: list[Path] = []
         for p in image_paths[:8]:
             try:
-                tmp_file = tmp_dir / f"qzone_{persona_name}_{p.stem}.jpg"
+                tmp_file = tmp_dir / f"qzone_{persona_name}_{uuid.uuid4().hex[:8]}_{p.stem}.jpg"
                 await asyncio.to_thread(
                     self._compress_image_for_caption, p, tmp_file, 1024, 80
                 )
-                caption_image_paths.append(str(tmp_file))
+                caption_image_paths.append(tmp_file.as_uri())
                 tmp_files.append(tmp_file)
             except Exception as e:
                 logger.warning(
@@ -1069,7 +1071,7 @@ class DailySelfieService:
                 logger.warning("[DailySelfie] 参考图搜索失败: query=%s error=%s", query[:50], e)
 
         await asyncio.gather(*[_search_one(i, q) for i, q in enumerate(queries)])
-        return [r for r in results if r is not None]
+        return results
 
     async def _get_style_pool(self, wardrobe: Any) -> list[str]:
         try:

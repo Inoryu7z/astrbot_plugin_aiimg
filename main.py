@@ -1082,7 +1082,8 @@ class GiteeAIImagePlugin(Star):
             return
         yield event.plain_result("⏳ 补画任务已启动...")
         persona_name = await self._get_current_persona_name(event)
-        await self.daily_selfie.run_daily_selfie(persona_name=persona_name or "")
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        await self.daily_selfie.run_daily_selfie(persona_name=persona_name or "", umo=umo)
 
     @filter.command("补画状态")
     async def daily_selfie_status_command(self, event: AstrMessageEvent):
