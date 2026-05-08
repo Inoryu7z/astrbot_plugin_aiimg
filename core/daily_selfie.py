@@ -559,6 +559,7 @@ class DailySelfieService:
         logger.info("[DailySelfie] 人格 %s 生成 %d 条提示词，开始并发画图", persona_name, len(all_prompts))
 
         tasks: list[asyncio.Task] = []
+        task_prompts: list[tuple[str, dict | None]] = []
 
         for prompt, ref in all_prompts:
             cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
@@ -589,6 +590,7 @@ class DailySelfieService:
                 )
             )
             tasks.append(t)
+            task_prompts.append((prompt, ref))
             await asyncio.sleep(request_interval)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -607,13 +609,11 @@ class DailySelfieService:
                     logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
                 else:
                     logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 None", persona_name, i)
-                if i < len(all_prompts):
-                    prompt_text, ref_info = all_prompts[i]
+                if i < len(task_prompts):
+                    prompt_text, ref_info = task_prompts[i]
                     ref_path = ref_info.get("image_path", "") if ref_info else ""
                     ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
                     failed_items.append((prompt_text, ref_path, ref_strength))
-
-        await self._publish_to_qzone(persona_name, success_paths, persona["config"])
 
         if failed_items:
             retry_enabled = self._is_retry_on_fail()
@@ -650,6 +650,7 @@ class DailySelfieService:
                             await self.counter.increment(provider_id)
                             logger.info("[DailySelfie] 人格 %s 重试成功: %s", persona_name, image_path)
                             await self._save_to_wardrobe(image_path, persona_name)
+                            success_paths.append(image_path)
                             success += 1
                             fail -= 1
                         else:
@@ -658,6 +659,8 @@ class DailySelfieService:
                         logger.error("[DailySelfie] 人格 %s 重试超时(300s)", persona_name)
                     except Exception as e:
                         logger.error("[DailySelfie] 人格 %s 重试失败: %s", persona_name, e)
+
+        await self._publish_to_qzone(persona_name, success_paths, persona["config"])
 
         return success, fail
 
@@ -752,18 +755,18 @@ class DailySelfieService:
             persona_name, image_paths, provider_id
         )
         if not caption:
-            logger.warning("[DailySelfie] 人格 %s 生成空间配文失败", persona_name)
-            return
+            caption = datetime.now().strftime("%Y-%m-%d")
+            logger.warning(
+                "[DailySelfie] 人格 %s 生成空间配文失败，使用日期作为回退配文",
+                persona_name,
+            )
 
-        image_path_list: list[str] = []
-        for p in image_paths:
-            try:
-                if p.exists():
-                    image_path_list.append(str(p))
-            except Exception as e:
-                logger.warning("[DailySelfie] 检查图片失败: %s, err=%s", p, e)
+        image_urls: list[str] = []
+        for p in image_paths[:9]:
+            if p.exists():
+                image_urls.append(p.as_uri())
 
-        if not image_path_list:
+        if not image_urls:
             return
 
         qzone_star = self.plugin.context.get_registered_star(
@@ -776,12 +779,12 @@ class DailySelfieService:
         qzone_plugin = qzone_star.star_cls
         try:
             await qzone_plugin.service.publish_post(
-                text=caption, images=image_path_list
+                text=caption, images=image_urls
             )
             logger.info(
                 "[DailySelfie] 人格 %s 空间说说发布成功，共 %d 张图",
                 persona_name,
-                len(image_bytes_list),
+                len(image_urls),
             )
         except Exception as e:
             logger.error(
@@ -800,13 +803,15 @@ class DailySelfieService:
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         caption_image_paths: list[str] = []
-        for p in image_paths[:9]:
+        tmp_files: list[Path] = []
+        for p in image_paths[:8]:
             try:
                 tmp_file = tmp_dir / f"qzone_{persona_name}_{p.stem}.jpg"
                 await asyncio.to_thread(
                     self._compress_image_for_caption, p, tmp_file, 1024, 80
                 )
                 caption_image_paths.append(str(tmp_file))
+                tmp_files.append(tmp_file)
             except Exception as e:
                 logger.warning(
                     "[DailySelfie] 准备配文图片失败: %s, err=%s", p, e
@@ -818,6 +823,7 @@ class DailySelfieService:
             "禁止使用任何markdown格式、编号、标签、emoji。"
         )
 
+        result_text = ""
         for attempt in range(2):
             try:
                 resp = await asyncio.wait_for(
@@ -836,7 +842,8 @@ class DailySelfieService:
                         persona_name,
                         text[:50],
                     )
-                    return text
+                    result_text = text
+                    break
             except asyncio.TimeoutError:
                 logger.warning(
                     "[DailySelfie] 人格 %s 生成空间配文超时(第%d次)", persona_name, attempt + 1
@@ -852,7 +859,13 @@ class DailySelfieService:
                     logger.info("[DailySelfie] 人格 %s 将重试一次", persona_name)
                     continue
 
-        return ""
+        for f in tmp_files:
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        return result_text
 
     @staticmethod
     def _compress_image_for_caption(
