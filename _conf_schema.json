@@ -313,36 +313,32 @@
             "default": false
           },
           "daily_selfie_providers": {
-            "type": "list",
+            "type": "template_list",
             "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
-            "hint": "格式：provider_id:daily_limit:schedule_time。schedule_time可省略。多提供商用\"添加\"按钮添加。示例：grok:10:23:00",
-            "default": [
-              {
-                "provider_id": "",
-                "daily_limit": 10,
-                "schedule_time": ""
-              }
-            ],
-            "items": {
-              "type": "object",
-              "items": {
-                "provider_id": {
-                  "type": "string",
-                  "description": "提供商ID",
-                  "hint": "填写 providers 里配置的 id",
-                  "default": ""
-                },
-                "daily_limit": {
-                  "type": "int",
-                  "description": "每日额度上限",
-                  "hint": "该提供商每天允许的最大画图次数",
-                  "default": 10
-                },
-                "schedule_time": {
-                  "type": "string",
-                  "description": "补画触发时间（提供商级）",
-                  "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
-                  "default": ""
+            "hint": "每个提供商可单独设置额度和触发时间。点击\"添加\"按钮添加提供商。",
+            "default": [],
+            "templates": {
+              "provider": {
+                "name": "补画提供商",
+                "items": {
+                  "provider_id": {
+                    "type": "string",
+                    "description": "提供商ID",
+                    "hint": "填写 providers 里配置的 id",
+                    "default": ""
+                  },
+                  "daily_limit": {
+                    "type": "int",
+                    "description": "每日额度上限",
+                    "hint": "该提供商每天允许的最大画图次数",
+                    "default": 10
+                  },
+                  "schedule_time": {
+                    "type": "string",
+                    "description": "补画触发时间（提供商级）",
+                    "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
+                    "default": ""
+                  }
                 }
               }
             }
@@ -356,7 +352,7 @@
           "daily_selfie_qzone_publish_enabled": {
             "type": "bool",
             "description": "补画完成后自动发空间说说",
-            "hint": "开启后，每日补画完成后会用生成的图片发一条QQ空间说说。需要先配置下方多模态提供商。",
+            "hint": "开启后，每个提供商补画完成后会用该提供商生成的图片发一条QQ空间说说。需要先配置下方多模态提供商。",
             "default": false
           },
           "daily_selfie_qzone_chat_provider_id": {
@@ -415,36 +411,32 @@
             "default": false
           },
           "daily_selfie_providers": {
-            "type": "list",
+            "type": "template_list",
             "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
-            "hint": "格式：provider_id:daily_limit:schedule_time。schedule_time可省略。多提供商用\"添加\"按钮添加。示例：grok:10:23:00",
-            "default": [
-              {
-                "provider_id": "",
-                "daily_limit": 10,
-                "schedule_time": ""
-              }
-            ],
-            "items": {
-              "type": "object",
-              "items": {
-                "provider_id": {
-                  "type": "string",
-                  "description": "提供商ID",
-                  "hint": "填写 providers 里配置的 id",
-                  "default": ""
-                },
-                "daily_limit": {
-                  "type": "int",
-                  "description": "每日额度上限",
-                  "hint": "该提供商每天允许的最大画图次数",
-                  "default": 10
-                },
-                "schedule_time": {
-                  "type": "string",
-                  "description": "补画触发时间（提供商级）",
-                  "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
-                  "default": ""
+            "hint": "每个提供商可单独设置额度和触发时间。点击\"添加\"按钮添加提供商。",
+            "default": [],
+            "templates": {
+              "provider": {
+                "name": "补画提供商",
+                "items": {
+                  "provider_id": {
+                    "type": "string",
+                    "description": "提供商ID",
+                    "hint": "填写 providers 里配置的 id",
+                    "default": ""
+                  },
+                  "daily_limit": {
+                    "type": "int",
+                    "description": "每日额度上限",
+                    "hint": "该提供商每天允许的最大画图次数",
+                    "default": 10
+                  },
+                  "schedule_time": {
+                    "type": "string",
+                    "description": "补画触发时间（提供商级）",
+                    "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
+                    "default": ""
+                  }
                 }
               }
             }

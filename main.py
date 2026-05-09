@@ -2527,16 +2527,10 @@ class GiteeAIImagePlugin(Star):
                     conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
                     if conf_persona != persona_name:
                         continue
-                    providers_raw = conf.get("daily_selfie_providers", [])
-                    if not isinstance(providers_raw, list):
-                        continue
-                    for pv in providers_raw:
-                        if not isinstance(pv, dict):
-                            continue
-                        pid = str(pv.get("provider_id", "") or "").strip()
-                        if not pid:
-                            continue
-                        limit = self._as_int(pv.get("daily_limit", 10), default=10)
+                    providers = self.daily_selfie._parse_providers_from_conf(conf, idx)
+                    for pv in providers:
+                        pid = pv["provider_id"]
+                        limit = pv["daily_limit"]
                         if await self.daily_selfie.counter.reserve(pid, limit):
                             logger.info("[aiimg_generate] 自拍计数+1: persona=%s provider=%s", persona_name, pid)
                             break
