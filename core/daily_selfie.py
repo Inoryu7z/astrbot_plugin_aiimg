@@ -720,6 +720,7 @@ class DailySelfieService:
                                 ref_image_path=ref_path,
                                 ref_strength=ref_strength,
                                 persona_conf=persona["config"],
+                                provider_id=selected_pid,
                             ),
                             timeout=300,
                         )
@@ -774,6 +775,7 @@ class DailySelfieService:
                     ref_image_path=ref_image_path,
                     ref_strength=ref_strength,
                     persona_conf=persona["config"],
+                    provider_id=provider_id,
                 ),
                 timeout=300,
             )
