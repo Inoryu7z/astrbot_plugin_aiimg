@@ -2938,6 +2938,7 @@ class GiteeAIImagePlugin(Star):
             ref_image_path: str,
             ref_strength: str = "style",
             persona_conf: dict | None = None,
+            provider_id: str = "",
     ) -> Path | None:
         ref_paths = self._get_persona_config_selfie_reference_paths(persona_name)
         if not ref_paths:
@@ -2954,10 +2955,15 @@ class GiteeAIImagePlugin(Star):
             logger.warning("[daily_selfie] 人格 %s 参考照读取失败", persona_name)
             return None
 
-        chain_override = self._get_persona_selfie_chain(persona_name)
-        if not chain_override:
-            logger.warning("[daily_selfie] 人格 %s 未配置自拍链路", persona_name)
-            return None
+        if provider_id:
+            backend_override = provider_id
+            chain_override = None
+        else:
+            backend_override = None
+            chain_override = self._get_persona_selfie_chain(persona_name)
+            if not chain_override:
+                logger.warning("[daily_selfie] 人格 %s 未配置自拍链路", persona_name)
+                return None
 
         size = None
         if persona_conf:
@@ -2967,12 +2973,20 @@ class GiteeAIImagePlugin(Star):
 
         final_prompt = prompt
 
-        logger.info(
-            "[daily_selfie] persona=%s prompt=%s providers=%s",
-            persona_name,
-            final_prompt,
-            [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
-        )
+        if provider_id:
+            logger.info(
+                "[daily_selfie] persona=%s prompt=%s provider=%s (daily_selfie_provider)",
+                persona_name,
+                final_prompt,
+                provider_id,
+            )
+        else:
+            logger.info(
+                "[daily_selfie] persona=%s prompt=%s providers=%s",
+                persona_name,
+                final_prompt,
+                [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
+            )
 
         if self.edit is None:
             logger.error("[daily_selfie] self.edit is None! 插件可能已被重载")
@@ -2986,6 +3000,7 @@ class GiteeAIImagePlugin(Star):
         return await self.edit.edit(
             prompt=final_prompt,
             images=ref_images,
+            backend=backend_override,
             size=size,
             resolution=None,
             default_output="",
