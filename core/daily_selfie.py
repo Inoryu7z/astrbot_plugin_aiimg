@@ -100,6 +100,30 @@ class DailyQuotaCounter:
         count = await self.get_count(provider_id)
         return max(0, limit - count)
 
+    async def reserve(self, provider_id: str, limit: int) -> bool:
+        """原子性预留额度：检查剩余 > 0 时递增，返回 True 表示预留成功。"""
+        async with self._lock:
+            self._ensure_date()
+            counts = self._data.setdefault("counts", {})
+            cur = int(counts.get(provider_id, 0))
+            if cur >= limit:
+                return False
+            counts[provider_id] = cur + 1
+            await self._save_async()
+            return True
+
+    async def release(self, provider_id: str) -> None:
+        """释放之前预留的额度（生图失败时回退）。"""
+        async with self._lock:
+            self._ensure_date()
+            counts = self._data.setdefault("counts", {})
+            cur = max(0, int(counts.get(provider_id, 0)) - 1)
+            if cur <= 0:
+                counts.pop(provider_id, None)
+            else:
+                counts[provider_id] = cur
+            await self._save_async()
+
     def get_date(self) -> str:
         return self._data.get("date", "")
 
@@ -236,6 +260,12 @@ class DailySelfieService:
                 return custom
         return self._get_global_schedule_time()
 
+    def _get_provider_schedule_time(self, persona_name: str, provider: dict) -> str:
+        provider_time = str(provider.get("schedule_time", "") or "").strip()
+        if provider_time:
+            return provider_time
+        return self._get_persona_schedule_time(persona_name)
+
     def _parse_time_str(self, time_str: str) -> tuple[int, int]:
         try:
             parts = time_str.split(":")
@@ -261,13 +291,15 @@ class DailySelfieService:
                 min_seconds = s
         return min_seconds
 
-    def _get_all_schedule_times(self) -> dict[str, tuple[int, int]]:
+    def _get_all_schedule_times(self) -> dict[tuple[str, str], tuple[int, int]]:
         schedules = {}
         personas = self._get_enabled_personas()
         for p in personas:
             pname = p["persona_name"]
-            time_str = self._get_persona_schedule_time(pname)
-            schedules[pname] = self._parse_time_str(time_str)
+            for pv in p["providers"]:
+                pid = pv["provider_id"]
+                time_str = self._get_provider_schedule_time(pname, pv)
+                schedules[(pname, pid)] = self._parse_time_str(time_str)
         return schedules
 
     async def _cron_loop(self):
@@ -288,17 +320,40 @@ class DailySelfieService:
     async def _run_scheduled_personas(self):
         now = datetime.now()
         current_h, current_m = now.hour, now.minute
-        scheduled_personas = []
+        scheduled_entries: list[tuple[dict, str]] = []
         for p in self._get_enabled_personas():
             pname = p["persona_name"]
-            h, m = self._parse_time_str(self._get_persona_schedule_time(pname))
-            if h == current_h and m == current_m:
-                scheduled_personas.append(p)
-        if not scheduled_personas:
-            logger.debug("[DailySelfie] 当前时间无匹配的补画人格，跳过")
+            for pv in p["providers"]:
+                pid = pv["provider_id"]
+                h, m = self._parse_time_str(self._get_provider_schedule_time(pname, pv))
+                if h == current_h and m == current_m:
+                    persona_copy = {
+                        "index": p["index"],
+                        "persona_name": pname,
+                        "providers": [pv],
+                        "config": p["config"],
+                    }
+                    scheduled_entries.append((persona_copy, pid))
+        if not scheduled_entries:
+            logger.debug("[DailySelfie] 当前时间无匹配的补画提供商，跳过")
             return
-        logger.info("[DailySelfie] 触发补画人格: %s", ", ".join(p["persona_name"] for p in scheduled_personas))
-        await self._run_personas(scheduled_personas)
+        unique_personas: dict[str, dict] = {}
+        for persona_copy, _pid in scheduled_entries:
+            pname = persona_copy["persona_name"]
+            if pname not in unique_personas:
+                unique_personas[pname] = {
+                    "index": persona_copy["index"],
+                    "persona_name": pname,
+                    "providers": [],
+                    "config": persona_copy["config"],
+                }
+            unique_personas[pname]["providers"].extend(persona_copy["providers"])
+        merged = list(unique_personas.values())
+        logger.info("[DailySelfie] 触发补画: %s", ", ".join(
+            f"{p['persona_name']}({', '.join(v['provider_id'] for v in p['providers'])})"
+            for p in merged
+        ))
+        await self._run_personas(merged)
 
     def _get_enabled_personas(self) -> list[dict[str, Any]]:
         personas = []
@@ -308,18 +363,32 @@ class DailySelfieService:
                 continue
             if not self.plugin._as_bool(conf.get("daily_selfie_enabled", False), default=False):
                 continue
-            provider_id = str(conf.get("daily_selfie_provider_id", "") or "").strip()
-            if not provider_id:
+            providers_raw = conf.get("daily_selfie_providers", [])
+            if not isinstance(providers_raw, list) or not providers_raw:
                 continue
-            daily_limit = self.plugin._as_int(conf.get("daily_selfie_limit", 20), default=20)
+            providers = []
+            for pv in providers_raw:
+                if not isinstance(pv, dict):
+                    continue
+                pid = str(pv.get("provider_id", "") or "").strip()
+                if not pid:
+                    continue
+                limit = self.plugin._as_int(pv.get("daily_limit", 10), default=10)
+                schedule_time = str(pv.get("schedule_time", "") or "").strip()
+                providers.append({
+                    "provider_id": pid,
+                    "daily_limit": limit,
+                    "schedule_time": schedule_time,
+                })
+            if not providers:
+                continue
             persona_name = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
             if not persona_name or persona_name == "default":
                 continue
             personas.append({
                 "index": idx,
                 "persona_name": persona_name,
-                "provider_id": provider_id,
-                "daily_limit": daily_limit,
+                "providers": providers,
                 "config": conf,
             })
         return personas
@@ -378,13 +447,15 @@ class DailySelfieService:
             recent_styles = await self._get_recent_styles(wardrobe)
 
             for p in personas:
-                remaining = await self.counter.get_remaining(p["provider_id"], p["daily_limit"])
-                if remaining <= 0:
-                    logger.info("[DailySelfie] 人格 %s 额度已用完，跳过", p["persona_name"])
+                total_remaining = 0
+                for pv in p["providers"]:
+                    total_remaining += await self.counter.get_remaining(pv["provider_id"], pv["daily_limit"])
+                if total_remaining <= 0:
+                    logger.info("[DailySelfie] 人格 %s 所有提供商额度已用完，跳过", p["persona_name"])
                     continue
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, remaining, request_interval, umo
+                    p, wardrobe, style_pool, recent_styles, total_remaining, request_interval, umo
                 )
                 total_success += s
                 total_fail += f
@@ -460,11 +531,10 @@ class DailySelfieService:
         umo: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
-        provider_id = persona["provider_id"]
         success = 0
         fail = 0
 
-        logger.info("[DailySelfie] 开始处理人格 %s，剩余额度 %d", persona_name, remaining)
+        logger.info("[DailySelfie] 开始处理人格 %s，总剩余额度 %d（%d个提供商）", persona_name, remaining, len(persona["providers"]))
 
         chat_provider_id = self._get_chat_provider_id(umo)
         if not chat_provider_id:
@@ -561,14 +631,9 @@ class DailySelfieService:
         logger.info("[DailySelfie] 人格 %s 生成 %d 条提示词，开始并发画图", persona_name, len(all_prompts))
 
         tasks: list[asyncio.Task] = []
-        task_prompts: list[tuple[str, dict | None]] = []
+        task_prompts: list[tuple[str, dict | None, str]] = []
 
         for prompt, ref in all_prompts:
-            cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
-            if cur_remaining <= 0:
-                logger.info("[DailySelfie] 人格 %s 额度用完，停止", persona_name)
-                break
-
             if not prompt:
                 fail += 1
                 continue
@@ -584,27 +649,35 @@ class DailySelfieService:
                 ref_image_path = ""
                 ref_strength = ""
 
-            logger.info("[DailySelfie] 人格 %s 创建画图任务 %d: ref=%s strength=%s", persona_name, len(tasks), ref_image_path[:50] if ref_image_path else "纯文生图", ref_strength or "无")
+            selected_pid = await self._reserve_provider(persona)
+            if selected_pid is None:
+                logger.info("[DailySelfie] 人格 %s 所有提供商额度用完，停止", persona_name)
+                break
+
+            logger.info("[DailySelfie] 人格 %s 创建画图任务 %d: provider=%s ref=%s strength=%s", persona_name, len(tasks), selected_pid, ref_image_path[:50] if ref_image_path else "纯文生图", ref_strength or "无")
 
             t = asyncio.create_task(
                 self._generate_one_selfie(
                     persona_name, prompt, ref_image_path, ref_strength, persona,
+                    provider_id=selected_pid,
                 )
             )
             tasks.append(t)
-            task_prompts.append((prompt, ref))
+            task_prompts.append((prompt, ref, selected_pid))
             await asyncio.sleep(request_interval)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("[DailySelfie] 人格 %s 并发画图完成: tasks=%d results=%d", persona_name, len(tasks), len(results))
 
         failed_items: list[tuple[str, str, str]] = []
-        success_paths: list[Path] = []
+        provider_success: dict[str, list[Path]] = {}
 
         for i, r in enumerate(results):
             if isinstance(r, Path):
                 success += 1
-                success_paths.append(r)
+                if i < len(task_prompts):
+                    _pid = task_prompts[i][2]
+                    provider_success.setdefault(_pid, []).append(r)
             else:
                 fail += 1
                 if isinstance(r, Exception):
@@ -612,7 +685,9 @@ class DailySelfieService:
                 else:
                     logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 None", persona_name, i)
                 if i < len(task_prompts):
-                    prompt_text, ref_info = task_prompts[i]
+                    prompt_text, ref_info, _pid = task_prompts[i]
+                    if _pid:
+                        await self.counter.release(_pid)
                     ref_path = ref_info.get("image_path", "") if ref_info else ""
                     ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
                     failed_items.append((prompt_text, ref_path, ref_strength))
@@ -626,14 +701,14 @@ class DailySelfieService:
 
             if retry_enabled:
                 for prompt_text, ref_path, ref_strength in failed_items:
-                    cur_remaining = await self.counter.get_remaining(provider_id, persona["daily_limit"])
-                    if cur_remaining <= 0:
-                        logger.info("[DailySelfie] 人格 %s 重试时额度用完，停止", persona_name)
+                    selected_pid = await self._reserve_provider(persona)
+                    if selected_pid is None:
+                        logger.info("[DailySelfie] 人格 %s 重试时所有提供商额度用完，停止", persona_name)
                         break
 
                     logger.info(
-                        "[DailySelfie] 人格 %s 重试画图: ref=%s",
-                        persona_name, ref_path[:50] if ref_path else "纯文生图",
+                        "[DailySelfie] 人格 %s 重试画图: provider=%s ref=%s",
+                        persona_name, selected_pid, ref_path[:50] if ref_path else "纯文生图",
                     )
                     await asyncio.sleep(request_interval)
 
@@ -649,22 +724,37 @@ class DailySelfieService:
                             timeout=300,
                         )
                         if image_path:
-                            await self.counter.increment(provider_id)
-                            logger.info("[DailySelfie] 人格 %s 重试成功: %s", persona_name, image_path)
+                            logger.info("[DailySelfie] 人格 %s 重试成功: %s provider=%s", persona_name, image_path, selected_pid)
                             await self._save_to_wardrobe(image_path, persona_name)
-                            success_paths.append(image_path)
+                            provider_success.setdefault(selected_pid, []).append(image_path)
                             success += 1
                             fail -= 1
                         else:
+                            await self.counter.release(selected_pid)
                             logger.warning("[DailySelfie] 人格 %s 重试返回空路径", persona_name)
                     except asyncio.TimeoutError:
+                        await self.counter.release(selected_pid)
                         logger.error("[DailySelfie] 人格 %s 重试超时(300s)", persona_name)
                     except Exception as e:
+                        await self.counter.release(selected_pid)
                         logger.error("[DailySelfie] 人格 %s 重试失败: %s", persona_name, e)
 
-        await self._publish_to_qzone(persona_name, success_paths, persona["config"])
+        for pid, paths in provider_success.items():
+            if paths:
+                logger.info("[DailySelfie] 人格 %s 提供商 %s 完成 %d 张，发布空间", persona_name, pid, len(paths))
+                await self._publish_to_qzone(persona_name, paths, persona["config"])
 
         return success, fail
+
+    async def _reserve_provider(self, persona: dict) -> str | None:
+        """原子性预留提供商额度，返回提供商 ID，无可用则返回 None。"""
+        for pv in persona["providers"]:
+            pid = pv["provider_id"]
+            limit = pv["daily_limit"]
+            if await self.counter.reserve(pid, limit):
+                logger.debug("[DailySelfie] 预留额度: provider=%s limit=%s", pid, limit)
+                return pid
+        return None
 
     async def _generate_one_selfie(
         self,
@@ -673,9 +763,9 @@ class DailySelfieService:
         ref_image_path: str,
         ref_strength: str,
         persona: dict,
+        provider_id: str = "",
     ) -> Path | None:
-        provider_id = persona["provider_id"]
-        logger.info("[DailySelfie] 人格 %s 开始画图: ref=%s prompt_len=%d", persona_name, ref_image_path[:50] if ref_image_path else "空", len(prompt))
+        logger.info("[DailySelfie] 人格 %s 开始画图: provider=%s ref=%s prompt_len=%d", persona_name, provider_id, ref_image_path[:50] if ref_image_path else "空", len(prompt))
         try:
             image_path = await asyncio.wait_for(
                 self.plugin._generate_daily_selfie_image(
@@ -688,7 +778,6 @@ class DailySelfieService:
                 timeout=300,
             )
             if image_path:
-                await self.counter.increment(provider_id)
                 logger.info("[DailySelfie] 人格 %s 补画成功: %s", persona_name, image_path)
                 await self._save_to_wardrobe(image_path, persona_name)
                 return image_path
@@ -1139,14 +1228,21 @@ class DailySelfieService:
             "personas": [],
         }
         for p in personas:
-            pid = p["provider_id"]
-            used = counts.get(pid, 0)
-            limit = p["daily_limit"]
-            status["personas"].append({
+            persona_status = {
                 "persona_name": p["persona_name"],
-                "provider_id": pid,
-                "used": used,
-                "limit": limit,
-                "remaining": max(0, limit - used),
-            })
+                "providers": [],
+            }
+            for pv in p["providers"]:
+                pid = pv["provider_id"]
+                used = counts.get(pid, 0)
+                limit = pv["daily_limit"]
+                schedule_time = self._get_provider_schedule_time(p["persona_name"], pv)
+                persona_status["providers"].append({
+                    "provider_id": pid,
+                    "used": used,
+                    "limit": limit,
+                    "remaining": max(0, limit - used),
+                    "schedule_time": schedule_time,
+                })
+            status["personas"].append(persona_status)
         return status

@@ -1100,10 +1100,13 @@ class GiteeAIImagePlugin(Star):
         if not status["personas"]:
             lines.append("暂无启用补画的人格。")
         for p in status["personas"]:
-            lines.append(
-                f"👤 {p['persona_name']} | 提供商: {p['provider_id']} | "
-                f"已用: {p['used']}/{p['limit']} | 剩余: {p['remaining']}"
-            )
+            lines.append(f"👤 {p['persona_name']}")
+            for pv in p["providers"]:
+                lines.append(
+                    f"  ├ 提供商: {pv['provider_id']} | "
+                    f"已用: {pv['used']}/{pv['limit']} | 剩余: {pv['remaining']} | "
+                    f"⏰ {pv.get('schedule_time', '')}"
+                )
         yield event.plain_result("\n".join(lines))
 
     # ==================== 视频生成 ====================
@@ -1557,6 +1560,8 @@ class GiteeAIImagePlugin(Star):
                 event, prompt, mode, target_backend, size, resolution
             )
             self._remember_last_image(event, image_path, mode=result_mode)
+            if result_mode == "selfie":
+                await self._track_selfie_quota(event)
             sent = await self._send_image_with_fallback(event, image_path)
             if sent:
                 await mark_success(event)
@@ -2492,23 +2497,7 @@ class GiteeAIImagePlugin(Star):
         await mark_success(event)
 
         if mode == "selfie":
-            try:
-                persona_name = await self._get_current_persona_name(event)
-                if persona_name:
-                    for idx in [1, 2]:
-                        conf = self._get_selfie_persona_config(idx)
-                        if not conf:
-                            continue
-                        conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
-                        if conf_persona != persona_name:
-                            continue
-                        pid = str(conf.get("daily_selfie_provider_id", "") or "").strip()
-                        if pid:
-                            await self.daily_selfie.counter.increment(pid)
-                            logger.info("[aiimg_generate] 自拍计数+1: persona=%s provider=%s", persona_name, pid)
-                        break
-            except Exception as e:
-                logger.warning("[aiimg_generate] 自拍计数失败: %s", e)
+            await self._track_selfie_quota(event)
 
         ctx_mode = self._get_image_context_mode()
 
@@ -2526,6 +2515,34 @@ class GiteeAIImagePlugin(Star):
             "[aiimg_generate] LLM上下文图片构建失败，降级为文字描述"
         )
         return self._build_llm_tool_text_desc_result(prompt)
+
+    async def _track_selfie_quota(self, event: AstrMessageEvent) -> None:
+        try:
+            persona_name = await self._get_current_persona_name(event)
+            if persona_name:
+                for idx in [1, 2]:
+                    conf = self._get_selfie_persona_config(idx)
+                    if not conf:
+                        continue
+                    conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+                    if conf_persona != persona_name:
+                        continue
+                    providers_raw = conf.get("daily_selfie_providers", [])
+                    if not isinstance(providers_raw, list):
+                        continue
+                    for pv in providers_raw:
+                        if not isinstance(pv, dict):
+                            continue
+                        pid = str(pv.get("provider_id", "") or "").strip()
+                        if not pid:
+                            continue
+                        limit = self._as_int(pv.get("daily_limit", 10), default=10)
+                        if await self.daily_selfie.counter.reserve(pid, limit):
+                            logger.info("[aiimg_generate] 自拍计数+1: persona=%s provider=%s", persona_name, pid)
+                            break
+                    break
+        except Exception as e:
+            logger.warning("[aiimg_generate] 自拍计数失败: %s", e)
 
     def _get_selfie_ref_store_key(
             self, event: AstrMessageEvent, persona_name: str | None = None

@@ -312,17 +312,34 @@
             "hint": "开启后，该人格将参与每日自动补画，在额度未用完时自动生成自拍。",
             "default": false
           },
-          "daily_selfie_limit": {
-            "type": "int",
-            "description": "每日画图额度上限",
-            "hint": "该提供商每天允许的最大画图次数，超过后不再补画。",
-            "default": 20
-          },
-          "daily_selfie_provider_id": {
-            "type": "string",
-            "description": "补画计数的提供商ID",
-            "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
-            "default": ""
+          "daily_selfie_providers": {
+            "type": "list",
+            "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
+            "hint": "每个条目包含 provider_id、daily_limit 和可选的 schedule_time。格式: [{\"provider_id\": \"xxx\", \"daily_limit\": 10, \"schedule_time\": \"23:00\"}, ...]",
+            "default": [],
+            "items": {
+              "type": "object",
+              "items": {
+                "provider_id": {
+                  "type": "string",
+                  "description": "提供商ID",
+                  "hint": "填写 providers 里配置的 id",
+                  "default": ""
+                },
+                "daily_limit": {
+                  "type": "int",
+                  "description": "每日额度上限",
+                  "hint": "该提供商每天允许的最大画图次数",
+                  "default": 10
+                },
+                "schedule_time": {
+                  "type": "string",
+                  "description": "补画触发时间（提供商级）",
+                  "hint": "覆盖人格级和全局补画时间。格式：HH:MM，如 23:30。留空则回退到人格级或全局设置。",
+                  "default": ""
+                }
+              }
+            }
           },
           "video_provider_ids": {
             "type": "list",
@@ -397,17 +414,34 @@
             "hint": "开启后，该人格将参与每日自动补画，在额度未用完时自动生成自拍。",
             "default": false
           },
-          "daily_selfie_limit": {
-            "type": "int",
-            "description": "每日画图额度上限",
-            "hint": "该提供商每天允许的最大画图次数，超过后不再补画。",
-            "default": 20
-          },
-          "daily_selfie_provider_id": {
-            "type": "string",
-            "description": "补画计数的提供商ID",
-            "hint": "填写 providers 里配置的 id，用于统计该提供商的每日使用次数。",
-            "default": ""
+          "daily_selfie_providers": {
+            "type": "list",
+            "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
+            "hint": "每个条目包含 provider_id、daily_limit 和可选的 schedule_time。格式: [{\"provider_id\": \"xxx\", \"daily_limit\": 10, \"schedule_time\": \"23:00\"}, ...]",
+            "default": [],
+            "items": {
+              "type": "object",
+              "items": {
+                "provider_id": {
+                  "type": "string",
+                  "description": "提供商ID",
+                  "hint": "填写 providers 里配置的 id",
+                  "default": ""
+                },
+                "daily_limit": {
+                  "type": "int",
+                  "description": "每日额度上限",
+                  "hint": "该提供商每天允许的最大画图次数",
+                  "default": 10
+                },
+                "schedule_time": {
+                  "type": "string",
+                  "description": "补画触发时间（提供商级）",
+                  "hint": "覆盖人格级和全局补画时间。格式：HH:MM，如 23:30。留空则回退到人格级或全局设置。",
+                  "default": ""
+                }
+              }
+            }
           },
           "video_provider_ids": {
             "type": "list",
