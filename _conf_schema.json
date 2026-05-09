@@ -315,7 +315,7 @@
           "daily_selfie_providers": {
             "type": "list",
             "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
-            "hint": "每个条目包含 provider_id、daily_limit 和可选的 schedule_time。格式: [{\"provider_id\": \"xxx\", \"daily_limit\": 10, \"schedule_time\": \"23:00\"}, ...]",
+            "hint": "每个条目填写一个提供商配置。provider_id 填 providers 里的 id，daily_limit 填该提供商每日额度上限，schedule_time 填该提供商的补拍触发时间（HH:MM，留空用全局设置）。多个人格配置同一提供商时，额度共享。",
             "default": [],
             "items": {
               "type": "object",
@@ -335,7 +335,7 @@
                 "schedule_time": {
                   "type": "string",
                   "description": "补画触发时间（提供商级）",
-                  "hint": "覆盖人格级和全局补画时间。格式：HH:MM，如 23:30。留空则回退到人格级或全局设置。",
+                  "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
                   "default": ""
                 }
               }
@@ -346,12 +346,6 @@
             "description": "视频服务商链路（按顺序兜底）",
             "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。留空则使用全局视频链路。",
             "default": []
-          },
-          "daily_selfie_schedule_time": {
-            "type": "string",
-            "description": "补画触发时间（人格级）",
-            "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
-            "default": ""
           },
           "daily_selfie_qzone_publish_enabled": {
             "type": "bool",
@@ -417,7 +411,7 @@
           "daily_selfie_providers": {
             "type": "list",
             "description": "补画提供商列表（按优先级排序，用完一个再用下一个）",
-            "hint": "每个条目包含 provider_id、daily_limit 和可选的 schedule_time。格式: [{\"provider_id\": \"xxx\", \"daily_limit\": 10, \"schedule_time\": \"23:00\"}, ...]",
+            "hint": "每个条目填写一个提供商配置。provider_id 填 providers 里的 id，daily_limit 填该提供商每日额度上限，schedule_time 填该提供商的补拍触发时间（HH:MM，留空用全局设置）。多个人格配置同一提供商时，额度共享。",
             "default": [],
             "items": {
               "type": "object",
@@ -437,7 +431,7 @@
                 "schedule_time": {
                   "type": "string",
                   "description": "补画触发时间（提供商级）",
-                  "hint": "覆盖人格级和全局补画时间。格式：HH:MM，如 23:30。留空则回退到人格级或全局设置。",
+                  "hint": "该提供商的补拍触发时间。格式：HH:MM，如 23:30。留空则使用全局补拍时间。",
                   "default": ""
                 }
               }
@@ -448,12 +442,6 @@
             "description": "视频服务商链路（按顺序兜底）",
             "hint": "填写 providers 里配置的 id，第一个=主用，后面的=失败后自动切换。留空则使用全局视频链路。",
             "default": []
-          },
-          "daily_selfie_schedule_time": {
-            "type": "string",
-            "description": "补画触发时间（人格级）",
-            "hint": "覆盖全局补画时间。格式：HH:MM，如 23:30。留空使用全局设置。",
-            "default": ""
           },
           "daily_selfie_qzone_publish_enabled": {
             "type": "bool",
@@ -1422,7 +1410,9 @@
             "type": "string",
             "description": "类型（固定为 video）",
             "default": "video",
-            "options": ["video"]
+            "options": [
+              "video"
+            ]
           },
           "fallback_chain": {
             "type": "list",

@@ -1,4 +1,23 @@
-﻿### v1.4.8
+﻿### v1.5.0
+
+**🐛 修复补拍多提供商不切换后端 + 移除人格级补拍时间 + 优化配置提示**
+
+* 修复补拍多提供商不实际切换生图后端的 bug：`_generate_daily_selfie_image` 新增 `provider_id` 参数，填则作为 `backend` 覆盖
+* 额度是提供商级共享资源，计数 key 为 `provider_id`。多个人格配置同一提供商时额度共享（如提供商总额度 15，人格 A 配 5、人格 B 配 10，则共享 15 的池）
+* 移除人格级 `daily_selfie_schedule_time` 配置字段：补拍时间已改为提供商级，人格级字段无意义且造成混淆
+* `_get_provider_schedule_time` 回退逻辑改为直接回退到全局时间（不再经过人格级）
+* 优化 `daily_selfie_providers` 配置 hint：明确说明每个字段的含义和额度共享规则
+
+### v1.4.9
+
+**🐛 修复：补拍多提供商不实际切换生图后端**
+
+* 修复 `_generate_one_selfie` 接收预留的 `provider_id` 但从未传递给 `_generate_daily_selfie_image` 的 bug
+* 根因：多提供商额度计数正确，但实际生图始终走人格 `provider_ids` 链路，`daily_selfie_providers` 的各提供商仅做额度计数而未用于实际后端
+* `_generate_daily_selfie_image` 新增 `provider_id` 参数：填则作为 `backend` 覆盖（仅用该提供商），不填则走原人格链路
+* 重试路径同步修复，确保重试时也使用对应提供商后端
+
+### v1.4.8
 
 **🐛 修复：后台生成模式下 LLM 自拍不计入补画额度**
 
