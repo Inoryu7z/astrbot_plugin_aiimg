@@ -352,13 +352,40 @@ class DailySelfieService:
         for idx in [1, 2]:
             conf = self.plugin._get_selfie_persona_config(idx)
             if not conf:
+                logger.debug("[DailySelfie] selfie_persona_%d 无配置，跳过", idx)
                 continue
             if not self.plugin._as_bool(conf.get("daily_selfie_enabled", False), default=False):
+                logger.debug("[DailySelfie] selfie_persona_%d daily_selfie_enabled=false，跳过", idx)
                 continue
-            providers_raw = conf.get("daily_selfie_providers", [])
-            if not isinstance(providers_raw, list) or not providers_raw:
+
+            providers = self._parse_providers_from_conf(conf, idx)
+
+            if not providers:
+                logger.debug("[DailySelfie] selfie_persona_%d 无有效提供商，跳过", idx)
                 continue
-            providers = []
+
+            persona_name = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
+            if not persona_name or persona_name == "default":
+                logger.debug("[DailySelfie] selfie_persona_%d select_persona 为空或 default，跳过", idx)
+                continue
+
+            logger.info(
+                "[DailySelfie] selfie_persona_%d 已启用: persona=%s providers=%s",
+                idx, persona_name, [p["provider_id"] for p in providers],
+            )
+            personas.append({
+                "index": idx,
+                "persona_name": persona_name,
+                "providers": providers,
+                "config": conf,
+            })
+        return personas
+
+    def _parse_providers_from_conf(self, conf: dict, idx: int) -> list[dict]:
+        providers_raw = conf.get("daily_selfie_providers", [])
+        providers = []
+
+        if isinstance(providers_raw, list) and providers_raw:
             for pv in providers_raw:
                 if not isinstance(pv, dict):
                     continue
@@ -372,18 +399,23 @@ class DailySelfieService:
                     "daily_limit": limit,
                     "schedule_time": schedule_time,
                 })
-            if not providers:
-                continue
-            persona_name = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
-            if not persona_name or persona_name == "default":
-                continue
-            personas.append({
-                "index": idx,
-                "persona_name": persona_name,
-                "providers": providers,
-                "config": conf,
-            })
-        return personas
+
+        if not providers:
+            legacy_pid = str(conf.get("daily_selfie_provider_id", "") or "").strip()
+            if legacy_pid:
+                legacy_limit = self.plugin._as_int(conf.get("daily_selfie_limit", 10), default=10)
+                legacy_schedule = str(conf.get("daily_selfie_schedule_time", "") or "").strip()
+                logger.info(
+                    "[DailySelfie] selfie_persona_%d 从旧格式字段迁移: provider=%s limit=%d schedule=%s",
+                    idx, legacy_pid, legacy_limit, legacy_schedule,
+                )
+                providers.append({
+                    "provider_id": legacy_pid,
+                    "daily_limit": legacy_limit,
+                    "schedule_time": legacy_schedule,
+                })
+
+        return providers
 
     async def run_daily_selfie(self, persona_name: str = "", umo: str = ""):
         personas = self._get_enabled_personas()
