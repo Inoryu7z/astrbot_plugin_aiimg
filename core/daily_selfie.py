@@ -252,19 +252,11 @@ class DailySelfieService:
         selfie_conf = self.plugin._get_feature("selfie")
         return str(selfie_conf.get("daily_selfie_schedule_time", "23:30") or "23:30").strip()
 
-    def _get_persona_schedule_time(self, persona_name: str) -> str:
-        conf = self.plugin._get_persona_selfie_config(persona_name)
-        if conf:
-            custom = str(conf.get("daily_selfie_schedule_time", "") or "").strip()
-            if custom:
-                return custom
-        return self._get_global_schedule_time()
-
     def _get_provider_schedule_time(self, persona_name: str, provider: dict) -> str:
         provider_time = str(provider.get("schedule_time", "") or "").strip()
         if provider_time:
             return provider_time
-        return self._get_persona_schedule_time(persona_name)
+        return self._get_global_schedule_time()
 
     def _parse_time_str(self, time_str: str) -> tuple[int, int]:
         try:
@@ -748,7 +740,6 @@ class DailySelfieService:
         return success, fail
 
     async def _reserve_provider(self, persona: dict) -> str | None:
-        """原子性预留提供商额度，返回提供商 ID，无可用则返回 None。"""
         for pv in persona["providers"]:
             pid = pv["provider_id"]
             limit = pv["daily_limit"]
