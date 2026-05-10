@@ -119,7 +119,7 @@ class ProviderRegistry:
             return "grok_video"
         if pid in {"flow2api_video"}:
             return "flow2api_video"
-        if isinstance(normalized.get("fallback_chain"), list):
+        if isinstance(item.get("fallback_chain"), list):
             return "truegrok"
         return ""
 
