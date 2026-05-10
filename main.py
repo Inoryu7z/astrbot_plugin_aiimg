@@ -1420,7 +1420,7 @@ class GiteeAIImagePlugin(Star):
             return self._build_llm_tool_failure_result("当前有图片正在生成中，请稍后再试")
 
         b_raw = (backend or "auto").strip()
-        target_backend = self.registry.resolve_backend(b_raw)
+        target_backend = self.registry.resolve_backend(b_raw, kind="image")
         if b_raw and b_raw.lower() != "auto" and target_backend is None:
             logger.warning(
                 "[aiimg_generate] 忽略未知 backend 覆盖，回退自动链路: backend=%s",
@@ -1597,7 +1597,7 @@ class GiteeAIImagePlugin(Star):
             return self._build_llm_tool_failure_result("请提供视频提示词")
 
         b_raw = (backend or "auto").strip()
-        backend_resolved = self.registry.resolve_backend(b_raw)
+        backend_resolved = self.registry.resolve_backend(b_raw, kind="video")
         if backend_resolved:
             provider_override = backend_resolved
         else:

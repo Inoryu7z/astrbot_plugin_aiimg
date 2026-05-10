@@ -123,6 +123,11 @@ class ProviderRegistry:
             return "truegrok"
         return ""
 
+    _VIDEO_TEMPLATE_KEYS = frozenset({
+        "grok_video", "yunwu_grok_video", "yunwu_grok_video_3",
+        "grok2api_video", "flow2api_video", "truegrok",
+    })
+
     def _load_providers(self) -> None:
         raw = _as_list(self._config.get("providers"))
         for item in raw:
@@ -140,6 +145,8 @@ class ProviderRegistry:
             template_key = self._resolve_template_key(normalized)
             if template_key:
                 normalized["__template_key"] = template_key
+            if not str(normalized.get("kind") or "").strip():
+                normalized["kind"] = "video" if template_key in self._VIDEO_TEMPLATE_KEYS else "image"
             self._providers[provider_id] = normalized
 
     def validate(self) -> list[str]:
@@ -261,13 +268,17 @@ class ProviderRegistry:
                 out[pid] = lbl
         return out
 
-    def resolve_backend(self, raw: str) -> str | None:
+    def resolve_backend(self, raw: str, kind: str | None = None) -> str | None:
         raw = (raw or "").strip()
         if not raw or raw.lower() == "auto":
             return None
         if raw in self._providers:
+            if kind:
+                p = self._providers[raw]
+                if str(p.get("kind") or "").strip() != kind:
+                    return None
             return raw
-        for pid, label in self.provider_labels().items():
+        for pid, label in self.provider_labels(kind=kind).items():
             if label == raw:
                 return pid
         return None
