@@ -1,3 +1,11 @@
+### v1.5.1
+
+**🐛 修复：生图/视频后端隔离失效**
+
+* provider_registry 自动根据模板类型注入 kind 字段：视频模板（grok_video 等）kind=video，其余 kind=image
+* resolve_backend 新增 kind 参数：generate 工具只能解析 image 后端，video 工具只能解析 video 后端
+* 根因：_conf_schema.json 中只有 truegrok 模板定义了 kind 字段，其他视频模板和所有图片模板都缺少 kind，导致用户添加的生图后端不可见，而 generate 工具能错误调用到视频后端
+
 ﻿### v1.5.0
 
 **🐛 修复补拍多提供商不切换后端 + 移除人格级补拍时间 + 优化配置提示**
