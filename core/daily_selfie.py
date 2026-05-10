@@ -1175,6 +1175,7 @@ class DailySelfieService:
                         query=query,
                         current_persona=persona_name,
                         min_similarity=min_similarity,
+                        daily_selfie_mode=True,
                     )
                     if ref:
                         img_id = str(ref.get("image_id", ""))

@@ -1,3 +1,11 @@
+﻿### v1.5.2
+
+✨ 新增：补拍衰减过滤联动
+
+* `_search_reference_images()` 调用 `get_reference_image()` 时传入 `daily_selfie_mode=True`，启用衣橱插件的补拍衰减过滤
+
+---
+
 ### v1.5.1
 
 **🐛 修复：生图/视频后端隔离失效**
