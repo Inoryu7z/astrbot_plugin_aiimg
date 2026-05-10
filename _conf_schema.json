@@ -361,6 +361,13 @@
             "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
             "default": "",
             "_special": "select_provider"
+          },
+          "costume_designer_provider_id": {
+            "type": "string",
+            "description": "创意设计提供商（无参考图时）",
+            "hint": "补拍搜图无参考图时，调用此提供商进行专业服装与场景设计，再由对话模型生成提示词。留空则由对话模型自行构建提示词（现有行为）。",
+            "default": "",
+            "_special": "select_provider"
           }
         }
       },
@@ -457,6 +464,13 @@
             "type": "string",
             "description": "说说配文多模态模型",
             "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "costume_designer_provider_id": {
+            "type": "string",
+            "description": "创意设计提供商（无参考图时）",
+            "hint": "补拍搜图无参考图时，调用此提供商进行专业服装与场景设计，再由对话模型生成提示词。留空则由对话模型自行构建提示词（现有行为）。",
             "default": "",
             "_special": "select_provider"
           }
