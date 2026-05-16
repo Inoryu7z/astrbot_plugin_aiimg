@@ -508,6 +508,7 @@ class OpenAIChatImageBackend:
         supports_edit: bool = True,
         extra_body: dict | None = None,
         proxy_url: str | None = None,
+        user_agent: str | None = None,
     ):
         self.imgr = imgr
         self.base_url = normalize_openai_compat_base_url(base_url)
@@ -522,6 +523,9 @@ class OpenAIChatImageBackend:
         self._key_index = 0
         self._clients: dict[str, AsyncOpenAI] = {}
         self._http_client = None
+        self._default_headers: dict[str, str] = {}
+        if user_agent:
+            self._default_headers["User-Agent"] = user_agent
 
     @staticmethod
     def _supports_http_client_param() -> bool:
@@ -572,6 +576,8 @@ class OpenAIChatImageBackend:
                 "timeout": self.timeout,
                 "max_retries": self.max_retries,
             }
+            if self._default_headers:
+                kwargs["default_headers"] = self._default_headers
             if self.proxy_url and self._supports_http_client_param():
                 http_client = self._get_http_client()
                 if http_client is not None:
@@ -593,6 +599,8 @@ class OpenAIChatImageBackend:
             "timeout": self.timeout,
             "max_retries": self.max_retries,
         }
+        if self._default_headers:
+            kwargs["default_headers"] = self._default_headers
         if self.proxy_url and self._supports_http_client_param():
             http_client = self._get_http_client()
             if http_client is not None:

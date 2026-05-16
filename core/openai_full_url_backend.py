@@ -107,6 +107,7 @@ class OpenAIFullURLBackend:
             default_size: str = "4096x4096",
             supports_edit: bool = True,
             extra_body: dict | None = None,
+            user_agent: str | None = None,
     ):
         self.imgr = imgr
         self.full_generate_url = str(full_generate_url or "").strip()
@@ -123,6 +124,7 @@ class OpenAIFullURLBackend:
 
         self._key_index = 0
         self._client: httpx.AsyncClient | None = None
+        self._user_agent = user_agent
 
     async def close(self) -> None:
         if self._client is not None:
@@ -134,8 +136,12 @@ class OpenAIFullURLBackend:
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            headers: dict[str, str] = {}
+            if self._user_agent:
+                headers["User-Agent"] = self._user_agent
             self._client = httpx.AsyncClient(
-                timeout=float(self.timeout), follow_redirects=True
+                timeout=float(self.timeout), follow_redirects=True,
+                headers=headers or None,
             )
         return self._client
 

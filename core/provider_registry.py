@@ -360,6 +360,7 @@ class ProviderRegistry:
                 supports_edit=bool(conf.get("supports_edit", True)),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
                 proxy_url=str(conf.get("proxy_url") or "").strip() or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key in {"openai_images", "gemini_openai_images"}:
@@ -393,6 +394,7 @@ class ProviderRegistry:
                 supports_edit=bool(conf.get("supports_edit", True)),
                 extra_body=merged_extra or None,
                 proxy_url=str(conf.get("proxy_url") or "").strip() or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key == "openai_full_url_images":
@@ -411,6 +413,7 @@ class ProviderRegistry:
                 default_size=str(conf.get("default_size") or "4096x4096").strip(),
                 supports_edit=bool(conf.get("supports_edit", True)),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key == "modelscope_openai_images":
@@ -429,6 +432,7 @@ class ProviderRegistry:
                 supports_edit=bool(conf.get("supports_edit", False)),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
                 proxy_url=str(conf.get("proxy_url") or "").strip() or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key in {"openai_chat", "grok_chat", "gemini_openai_chat"}:
@@ -446,6 +450,7 @@ class ProviderRegistry:
                 supports_edit=bool(conf.get("supports_edit", True)),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
                 proxy_url=str(conf.get("proxy_url") or "").strip() or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key == "grok2api_images":
@@ -461,6 +466,7 @@ class ProviderRegistry:
                 default_model=str(conf.get("model") or "").strip(),
                 default_size=str(conf.get("default_size") or "4096x4096").strip(),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key == "gitee_images":
@@ -488,6 +494,7 @@ class ProviderRegistry:
                 extra_body=extra_body or None,
                 allowed_sizes=GITEE_SUPPORTED_SIZES,
                 ratio_default_sizes=self._get_draw_ratio_default_sizes(),
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
             )
 
         if template_key == "gitee_async":

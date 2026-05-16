@@ -764,6 +764,12 @@
             "description": "额外请求体（高级，会覆盖上方专用字段）",
             "items": {},
             "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
           }
         }
       },
@@ -830,6 +836,12 @@
             "description": "额外请求体（高级）",
             "items": {},
             "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
           }
         }
       },
@@ -891,6 +903,12 @@
             "description": "额外请求体（高级）",
             "items": {},
             "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
           }
         }
       },
@@ -955,6 +973,12 @@
             "description": "额外请求体（高级）",
             "items": {},
             "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
           }
         }
       },
