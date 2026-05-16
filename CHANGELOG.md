@@ -1,3 +1,20 @@
+### v1.6.2
+
+**🚀 新功能**
+
+* 自拍链路支持 per-provider output 覆盖：人格 selfie_persona 的 `provider_ids` 升级为 `chain`（template_list），每个服务商可单独设置输出分辨率，与改图/文生图的 chain 格式一致
+* 改图命令支持末尾比例参数：`/改图 换背景 16:9` 自动解析比例并映射尺寸，与 `/生图`、`/自拍` 一致
+* 比例参数支持中文冒号：`16：9` 等中文冒号输入自动规范化，不再被当作提示词
+* 文生图默认输出尺寸可留空：`draw.default_output` 下拉新增空选项，留空时由服务商默认决定
+* 提供商支持自定义 User-Agent 请求头：每个服务商可配置 `user_agent` 字段，填入浏览器 UA 可绕过中转站 UA 拦截
+
+**🐛 修复**
+
+* 自拍 `default_output` 优先级修正：`default_output` 改为传参而非设为 `size`，不再覆盖 per-provider output
+* daily_sharing 插件同步修复自拍 `default_output` 传参问题
+
+---
+
 ### v1.6.1
 
 **🔄 提示词优化：适配4字段结构**
