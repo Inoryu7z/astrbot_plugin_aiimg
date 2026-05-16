@@ -247,6 +247,7 @@ class Grok2ApiImagesBackend:
         default_model: str = "",
         default_size: str = "1024x1024",
         extra_body: dict | None = None,
+        user_agent: str | None = None,
     ):
         self.imgr = imgr
         self.base_url = str(base_url or "").strip()
@@ -255,6 +256,7 @@ class Grok2ApiImagesBackend:
         self.default_model = str(default_model or "").strip()
         self.default_size = str(default_size or "4096x4096").strip()
         self.extra_body = extra_body or {}
+        self._user_agent = user_agent
 
         self._endpoint_generate = _normalize_images_generations_url(self.base_url)
         self._endpoint_edit = _normalize_images_edits_url(self.base_url)
@@ -264,10 +266,13 @@ class Grok2ApiImagesBackend:
         return None
 
     def _headers(self) -> dict[str, str]:
-        return {
+        h = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
+        if self._user_agent:
+            h["User-Agent"] = self._user_agent
+        return h
 
     def _merge_extra(self, payload: dict) -> dict:
         eb = self.extra_body if isinstance(self.extra_body, dict) else {}

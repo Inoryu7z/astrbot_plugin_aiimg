@@ -205,6 +205,7 @@ class OpenAICompatBackend:
         proxy_url: str | None = None,
         allowed_sizes: list[str] | None = None,
         ratio_default_sizes: dict[str, str] | None = None,
+        user_agent: str | None = None,
     ):
         self.imgr = imgr
         self.base_url = normalize_openai_compat_base_url(base_url)
@@ -242,6 +243,9 @@ class OpenAICompatBackend:
         self._http_client = None
         self._images_generate_disabled_until = 0.0
         self._images_edit_disabled_until = 0.0
+        self._default_headers: dict[str, str] = {}
+        if user_agent:
+            self._default_headers["User-Agent"] = user_agent
 
     @staticmethod
     def _supports_http_client_param() -> bool:
@@ -399,6 +403,8 @@ class OpenAICompatBackend:
                 "timeout": self.timeout,
                 "max_retries": self.max_retries,
             }
+            if self._default_headers:
+                kwargs["default_headers"] = self._default_headers
             if self.proxy_url and self._supports_http_client_param():
                 http_client = self._get_http_client()
                 if http_client is not None:
@@ -420,6 +426,8 @@ class OpenAICompatBackend:
             "timeout": self.timeout,
             "max_retries": self.max_retries,
         }
+        if self._default_headers:
+            kwargs["default_headers"] = self._default_headers
         if self.proxy_url and self._supports_http_client_param():
             http_client = self._get_http_client()
             if http_client is not None:

@@ -199,6 +199,7 @@ class GrokImagesBackend:
         supports_edit: bool = True,
         extra_body: dict | None = None,
         proxy_url: str | None = None,
+        user_agent: str | None = None,
     ):
         self.imgr = imgr
         self.base_url = _normalize_base_url(base_url)
@@ -210,6 +211,7 @@ class GrokImagesBackend:
         self.supports_edit = bool(supports_edit)
         self.extra_body = extra_body or {}
         self.proxy_url = str(proxy_url or "").strip() or None
+        self._user_agent = user_agent
         self._session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
 
@@ -228,7 +230,10 @@ class GrokImagesBackend:
             return self._session
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"}
+        h = {"Authorization": f"Bearer {self.api_key}"}
+        if self._user_agent:
+            h["User-Agent"] = self._user_agent
+        return h
 
     @staticmethod
     def _retry_delay_seconds(attempt_index: int) -> float:
