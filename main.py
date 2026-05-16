@@ -771,8 +771,9 @@ class GiteeAIImagePlugin(Star):
         prompt = arg.strip()
         size: str | None = None
         parts = arg.split()
-        if parts and parts[-1] in self.SUPPORTED_RATIOS:
-            ratio = parts[-1]
+        last_part = parts[-1].replace("\uff1a", ":") if parts else ""
+        if parts and last_part in self.SUPPORTED_RATIOS:
+            ratio = last_part
             prompt = " ".join(parts[:-1]).strip()
             size = self._resolve_ratio_size(ratio)
 
@@ -2168,8 +2169,9 @@ class GiteeAIImagePlugin(Star):
 
         size: str | None = None
         parts = prompt.split()
-        if parts and parts[-1] in self.SUPPORTED_RATIOS:
-            ratio = parts[-1]
+        last_part = parts[-1].replace("\uff1a", ":") if parts else ""
+        if parts and last_part in self.SUPPORTED_RATIOS:
+            ratio = last_part
             prompt = " ".join(parts[:-1]).strip()
             size = self._resolve_ratio_size(ratio)
 
@@ -2269,8 +2271,9 @@ class GiteeAIImagePlugin(Star):
 
         size: str | None = None
         parts = prompt.split()
-        if parts and parts[-1] in self.SUPPORTED_RATIOS:
-            ratio = parts[-1]
+        last_part = parts[-1].replace("\uff1a", ":") if parts else ""
+        if parts and last_part in self.SUPPORTED_RATIOS:
+            ratio = last_part
             prompt = " ".join(parts[:-1]).strip()
             size = self._resolve_ratio_size(ratio)
 
@@ -2919,8 +2922,9 @@ class GiteeAIImagePlugin(Star):
 
         size: str | None = None
         parts = prompt.split()
-        if parts and parts[-1] in self.SUPPORTED_RATIOS:
-            ratio = parts[-1]
+        last_part = parts[-1].replace("\uff1a", ":") if parts else ""
+        if parts and last_part in self.SUPPORTED_RATIOS:
+            ratio = last_part
             prompt = " ".join(parts[:-1]).strip()
             size = self._resolve_ratio_size(ratio)
 
