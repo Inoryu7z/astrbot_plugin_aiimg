@@ -2733,17 +2733,27 @@ class GiteeAIImagePlugin(Star):
             conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
             if conf_persona != persona_name:
                 continue
+
+            chain = conf.get("chain", [])
+            if isinstance(chain, list) and chain:
+                has_valid = any(
+                    (isinstance(item, dict) and str(item.get("provider_id") or item.get("provider") or "").strip())
+                    or (isinstance(item, str) and item.strip())
+                    for item in chain
+                )
+                if has_valid:
+                    return chain
+
             provider_ids = conf.get("provider_ids", [])
-            if not isinstance(provider_ids, list):
-                continue
-            # 获取覆盖输出设置（用于链路中每个 provider 的 output）
-            output_override = str(conf.get("output_override", "") or "").strip()
-            chain_items = [
-                {"provider_id": str(pid).strip(), "output": output_override}
-                for pid in provider_ids
-                if str(pid).strip()
-            ]
-            return chain_items if chain_items else None
+            if isinstance(provider_ids, list) and provider_ids:
+                chain_items = [
+                    {"provider_id": str(pid).strip()}
+                    for pid in provider_ids
+                    if str(pid).strip()
+                ]
+                return chain_items if chain_items else None
+
+            return None
         return None
 
     def _get_persona_video_chain(self, persona_name: str) -> list[str] | None:
@@ -2837,16 +2847,9 @@ class GiteeAIImagePlugin(Star):
                 f"人格「{persona_name}」未配置自拍服务商链路。请在 WebUI 的 features.selfie_personas 中为该人格添加 chain。"
             )
 
-        # 获取人格自拍配置
         persona_conf = self._get_persona_selfie_config(persona_name)
-        
-        # 获取默认输出尺寸（如果调用方未指定）
-        if size is None and resolution is None:
-            default_output = str(persona_conf.get("default_output", "") or "").strip() if persona_conf else ""
-            if default_output:
-                size = default_output
-        
-        # 获取并应用提示词前缀
+        persona_default_output = str(persona_conf.get("default_output", "") or "").strip() if persona_conf else ""
+
         prompt_prefix = str(persona_conf.get("prompt_prefix", "") or "").strip() if persona_conf else ""
         
         extra_segs = await get_images_from_event(event, include_avatar=False)
@@ -2856,11 +2859,12 @@ class GiteeAIImagePlugin(Star):
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0), prompt_prefix=prompt_prefix)
 
         logger.debug(
-            "[selfie] persona=%s source=%s providers=%s size=%s",
+            "[selfie] persona=%s source=%s providers=%s size=%s default_output=%s",
             persona_name,
             source,
             [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
             size or resolution or "default",
+            persona_default_output or "none",
         )
 
         return await self.edit.edit(
@@ -2869,7 +2873,7 @@ class GiteeAIImagePlugin(Star):
             backend=backend,
             size=size,
             resolution=resolution,
-            default_output="",
+            default_output=persona_default_output,
             chain_override=chain_override,
         )
 
@@ -2959,11 +2963,9 @@ class GiteeAIImagePlugin(Star):
                 logger.warning("[daily_selfie] 人格 %s 未配置自拍链路", persona_name)
                 return None
 
-        size = None
+        persona_default_output = ""
         if persona_conf:
-            default_output = str(persona_conf.get("default_output", "") or "").strip()
-            if default_output:
-                size = default_output
+            persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
         final_prompt = prompt
 
@@ -2995,9 +2997,9 @@ class GiteeAIImagePlugin(Star):
             prompt=final_prompt,
             images=ref_images,
             backend=backend_override,
-            size=size,
+            size=None,
             resolution=None,
-            default_output="",
+            default_output=persona_default_output,
             chain_override=chain_override,
         )
 
