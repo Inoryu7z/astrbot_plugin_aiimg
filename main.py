@@ -2166,6 +2166,13 @@ class GiteeAIImagePlugin(Star):
             backend = override
             prompt = rest
 
+        size: str | None = None
+        parts = prompt.split()
+        if parts and parts[-1] in self.SUPPORTED_RATIOS:
+            ratio = parts[-1]
+            prompt = " ".join(parts[:-1]).strip()
+            size = self._resolve_ratio_size(ratio)
+
         # 获取图片
         image_segs = await get_images_from_event(
             event,
@@ -2206,6 +2213,7 @@ class GiteeAIImagePlugin(Star):
                 images=bytes_images,
                 backend=backend,
                 preset=preset,
+                size=size,
             )
             t_end = time.perf_counter()
 
@@ -2258,6 +2266,13 @@ class GiteeAIImagePlugin(Star):
         if override:
             backend = override
             prompt = rest
+
+        size: str | None = None
+        parts = prompt.split()
+        if parts and parts[-1] in self.SUPPORTED_RATIOS:
+            ratio = parts[-1]
+            prompt = " ".join(parts[:-1]).strip()
+            size = self._resolve_ratio_size(ratio)
 
         # 预设自动检测: prompt 完全匹配预设名时，自动转为预设
         if not preset and prompt:
