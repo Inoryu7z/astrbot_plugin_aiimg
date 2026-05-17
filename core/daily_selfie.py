@@ -1305,7 +1305,7 @@ class DailySelfieService:
                 persona_name,
             )
 
-        image_data: list[bytes | str] = []
+        image_data: list[bytes] = []
         for p in image_paths[:9]:
             if p.exists():
                 try:
@@ -1316,21 +1316,13 @@ class DailySelfieService:
                     )
                     converted = self._ensure_qzone_compatible_image(raw)
                     if converted is not None:
-                        if converted is not raw:
-                            logger.info(
-                                "[DailySelfie] 图片格式转换: %d -> %d bytes magic=%s",
-                                len(raw), len(converted),
-                                converted[:16].hex() if len(converted) >= 16 else converted.hex(),
-                            )
                         image_data.append(converted)
                     else:
                         logger.warning(
-                            "[DailySelfie] 图片格式转换失败，回退到 URI 模式: %s", p
+                            "[DailySelfie] 图片格式转换失败，跳过: %s", p
                         )
-                        image_data.append(p.as_uri())
                 except Exception as e:
-                    logger.warning("[DailySelfie] 读取图片失败，回退到 URI 模式: %s, err=%s", p, e)
-                    image_data.append(p.as_uri())
+                    logger.warning("[DailySelfie] 读取图片失败，跳过: %s, err=%s", p, e)
 
         if not image_data:
             return
@@ -1440,21 +1432,28 @@ class DailySelfieService:
 
             img = PILImage.open(io.BytesIO(raw))
             fmt = img.format
-            logger.info("[DailySelfie] PIL 检测图片格式: %s, 模式: %s, 尺寸: %s", fmt, img.mode, img.size)
-            if fmt in ("JPEG", "PNG", "GIF", "BMP"):
-                return raw
-            logger.info("[DailySelfie] 图片格式 %s 不被QQ空间支持，转换为JPEG", fmt)
-            if img.mode in ("RGBA", "LA", "P"):
+            mode = img.mode
+            logger.info(
+                "[DailySelfie] PIL 检测图片格式: %s, 模式: %s, 尺寸: %s, 原始大小: %d bytes",
+                fmt, mode, img.size, len(raw),
+            )
+            if mode in ("RGBA", "LA", "P"):
                 background = PILImage.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "P":
+                if mode == "P":
                     img = img.convert("RGBA")
                 background.paste(img, mask=img.split()[-1] if "A" in img.mode else None)
                 img = background
-            elif img.mode != "RGB":
+            elif mode != "RGB":
                 img = img.convert("RGB")
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=95)
-            return buf.getvalue()
+            img.save(buf, format="JPEG", quality=95, progressive=False)
+            result = buf.getvalue()
+            logger.info(
+                "[DailySelfie] 图片已重编码为 baseline RGB JPEG: %d -> %d bytes, magic=%s",
+                len(raw), len(result),
+                result[:8].hex() if len(result) >= 8 else result.hex(),
+            )
+            return result
         except Exception as e:
             logger.warning("[DailySelfie] 图片格式转换失败: %s", e)
             return None

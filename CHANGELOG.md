@@ -1,3 +1,11 @@
+### v1.6.4
+
+**🐛 修复**
+
+*   修复补拍发空间图片上传失败（顽固问题）：`_ensure_qzone_compatible_image` 移除格式短路逻辑，无条件重编码为 baseline RGB JPEG（`progressive=False`），确保剥离所有不兼容的色彩模式（CMYK/RGBA/YCCK 等）和渐进式编码；`_publish_to_qzone` 移除 URI 回退，转换失败则跳过该图片
+
+---
+
 ### v1.6.3
 
 **🐛 修复**
