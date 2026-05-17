@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import re
 import tempfile
@@ -1304,12 +1305,34 @@ class DailySelfieService:
                 persona_name,
             )
 
-        image_urls: list[str] = []
+        image_data: list[bytes | str] = []
         for p in image_paths[:9]:
             if p.exists():
-                image_urls.append(p.as_uri())
+                try:
+                    raw = await asyncio.to_thread(p.read_bytes)
+                    logger.info(
+                        "[DailySelfie] 读取图片: path=%s size=%d bytes magic=%s",
+                        p, len(raw), raw[:16].hex() if len(raw) >= 16 else raw.hex(),
+                    )
+                    converted = self._ensure_qzone_compatible_image(raw)
+                    if converted is not None:
+                        if converted is not raw:
+                            logger.info(
+                                "[DailySelfie] 图片格式转换: %d -> %d bytes magic=%s",
+                                len(raw), len(converted),
+                                converted[:16].hex() if len(converted) >= 16 else converted.hex(),
+                            )
+                        image_data.append(converted)
+                    else:
+                        logger.warning(
+                            "[DailySelfie] 图片格式转换失败，回退到 URI 模式: %s", p
+                        )
+                        image_data.append(p.as_uri())
+                except Exception as e:
+                    logger.warning("[DailySelfie] 读取图片失败，回退到 URI 模式: %s, err=%s", p, e)
+                    image_data.append(p.as_uri())
 
-        if not image_urls:
+        if not image_data:
             return
 
         qzone_star = self.plugin.context.get_registered_star(
@@ -1322,12 +1345,12 @@ class DailySelfieService:
         qzone_plugin = qzone_star.star_cls
         try:
             await qzone_plugin.service.publish_post(
-                text=caption, images=image_urls
+                text=caption, images=image_data
             )
             logger.info(
                 "[DailySelfie] 人格 %s 空间说说发布成功，共 %d 张图",
                 persona_name,
-                len(image_urls),
+                len(image_data),
             )
         except Exception as e:
             logger.error(
@@ -1409,6 +1432,32 @@ class DailySelfieService:
                 pass
 
         return result_text
+
+    @staticmethod
+    def _ensure_qzone_compatible_image(raw: bytes) -> bytes | None:
+        try:
+            from PIL import Image as PILImage
+
+            img = PILImage.open(io.BytesIO(raw))
+            fmt = img.format
+            logger.info("[DailySelfie] PIL 检测图片格式: %s, 模式: %s, 尺寸: %s", fmt, img.mode, img.size)
+            if fmt in ("JPEG", "PNG", "GIF", "BMP"):
+                return raw
+            logger.info("[DailySelfie] 图片格式 %s 不被QQ空间支持，转换为JPEG", fmt)
+            if img.mode in ("RGBA", "LA", "P"):
+                background = PILImage.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(img, mask=img.split()[-1] if "A" in img.mode else None)
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            return buf.getvalue()
+        except Exception as e:
+            logger.warning("[DailySelfie] 图片格式转换失败: %s", e)
+            return None
 
     @staticmethod
     def _compress_image_for_caption(

@@ -1,3 +1,11 @@
+### v1.6.3
+
+**🐛 修复**
+
+*   修复补拍发空间图片上传失败（"空间相册仅支持JPG、GIF、PNG、BMP等格式的图片"）：`_publish_to_qzone` 改为主动读取图片 bytes 并用 `_ensure_qzone_compatible_image` 确保格式兼容后传递给 qzone 插件，不再依赖 `file:///` URI + qzone `download_file` 链路；增加调试日志（图片路径、大小、magic bytes、PIL 检测格式）便于排查
+
+---
+
 ### v1.6.2
 
 **🚀 新功能**
