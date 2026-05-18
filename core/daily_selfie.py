@@ -1665,14 +1665,10 @@ class DailySelfieService:
 
     async def _get_style_pool(self, wardrobe: Any) -> list[str]:
         try:
-            db = getattr(wardrobe, "db", None)
-            if not db:
-                return []
-            if not hasattr(db, "get_tag_distribution"):
-                return []
-            dist = await db.get_tag_distribution(persona="")
-            styles = dist.get("style", {})
-            return [s for s, c in styles.items() if c > 0]
+            if hasattr(wardrobe, "get_merged_pools"):
+                pools = await wardrobe.get_merged_pools()
+                return list(pools.get("style", []))
+            return []
         except Exception as e:
             logger.warning("[DailySelfie] 获取风格池失败: %s", e)
             return []
