@@ -73,12 +73,14 @@ class ImageDrawService:
         default_output = self._default_output()
 
         last_error: Exception | None = None
+        last_failed_pid: str | None = None
         for pid, out_override in candidates:
             try:
                 backend = self.registry.get_backend(pid)
             except Exception as e:
                 last_error = e
-                logger.warning("[draw] Provider build failed: %s: %s", pid, e)
+                last_failed_pid = pid
+                logger.info("[draw] Provider=%s build failed: %s", pid, e)
                 continue
 
             output = out_override or default_output
@@ -104,6 +106,9 @@ class ImageDrawService:
                 return result
             except Exception as e:
                 last_error = e
-                logger.warning("[draw] Provider=%s failed: %s", pid, e)
+                last_failed_pid = pid
+                logger.info("[draw] Provider=%s failed: %s", pid, e)
 
-        raise RuntimeError(f"Draw failed: {last_error}") from last_error
+        raise RuntimeError(
+            f"Draw failed (last provider: {last_failed_pid}): {last_error}"
+        ) from last_error
