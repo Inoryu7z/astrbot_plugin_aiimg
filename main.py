@@ -404,6 +404,19 @@ class GiteeAIImagePlugin(Star):
                 store[user_id] = cur - 1
 
     @staticmethod
+    def _is_timeout_likely_sent(exc: Exception | None) -> bool:
+        if exc is None:
+            return False
+        err_repr = repr(exc).lower()
+        err_str = str(exc).lower()
+        return (
+            "timeout" in err_repr
+            or "timeout" in err_str
+            or "retcode=1200" in err_repr
+            or "retcode=1200" in err_str
+        )
+
+    @staticmethod
     def _is_rich_media_transfer_failed(exc: Exception | None) -> bool:
         if exc is None:
             return False
@@ -1995,6 +2008,9 @@ class GiteeAIImagePlugin(Star):
                 )
                 return True
             except Exception as e:
+                if self._is_timeout_likely_sent(e):
+                    logger.warning(f"[视频] 本地文件发送遇到超时错误，消息可能已送达，不再尝试其他方式: {e}")
+                    return True
                 logger.warning(f"[视频] 本地文件发送失败: {e}")
                 return False
 
@@ -2006,6 +2022,9 @@ class GiteeAIImagePlugin(Star):
                 )
                 return True
             except Exception as e:
+                if self._is_timeout_likely_sent(e):
+                    logger.warning(f"[视频] URL 发送遇到超时错误，消息可能已送达，不再尝试其他方式: {e}")
+                    return True
                 logger.warning(f"[视频] URL 发送失败: {e}")
                 return False
 
