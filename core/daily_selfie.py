@@ -130,49 +130,17 @@ class DailyQuotaCounter:
 
 
 _TASK_MODE_SYSTEM_PROMPT = (
-    "【自动拍照任务模式】\n\n"
-    "当收到自动拍照任务时，你需要完成以下流程：\n"
-    "1. 选择拍摄方案（自然语言描述服装风格、场景、姿势）\n"
-    "2. 等待系统返回参考图描述\n"
-    "3. 按照提示词构建规则构建提示词\n\n"
+    "【风格选择任务】\n\n"
+    "当收到自动拍照任务时，你需要完成以下核心任务：\n"
+    "从风格池中选择 {count} 种风格。你的唯一输出就是风格名称，一行一个，不需要任何额外描述。\n\n"
+    "选择策略：\n"
+    "1. 避免近期重复：优先排除近期已拍过的风格，让每次拍摄都有新鲜感\n"
+    "2. 广度覆盖：在可选范围内尽量覆盖不同类型的服装风格\n\n"
     "约束：\n"
-    "- 每次任务选择多种不同风格、姿势、构图，大胆与保守兼顾\n"
-    "- 优先选择近期未尝试过的风格\n"
-    "- 输出格式：每条一行，不编号，不解释\n"
+    "- 只输出风格名称，每条一行，不编号、不解释、不描述\n"
+    "- 禁止输出风格以外的任何内容\n"
     "- 禁止调用aiimg_generate工具"
 )
-
-_SKILL_RULES_SYSTEM_PROMPT = (
-    "## 提示词构建规则\n\n"
-    "### 最高优先级规则（覆盖一切其他规则和指引）\n"
-    "**面部必须完整露出。** 无论参考图描述或指引如何要求，都绝对不允许生成挡脸、遮脸、侧脸只露半脸、用手或物品遮挡面部的画面。"
-    "如果参考图描述中包含挡脸、遮脸的姿势，必须改为面部完整朝向镜头的替代姿势。此规则优先级高于一切指引。\n\n"
-    "### 固定开头\n"
-    "每条提示词必须以以下固定开头开始：\n"
-    "\"以前3张参考图中的同一少女为基准，完整保留她的五官、身材等全部人体身份特征，"
-    "绝对禁止任何拼图，为她生成一张新的写真："
-    "她有着白皙细腻的皮肤，纤细的身姿与格外饱满的曲线形成鲜明对比，\"\n\n"
-    "### 自拍母规则\n"
-    "在固定开头之后，按以下逻辑构建画面，最终串联成一段连贯的自然语言视觉描述：\n"
-    "1. 最终输出只能是一整段连贯、通顺、符合语法逻辑的自然长句，不要输出分析、分点、规则解释\n"
-    "2. 核心结构始终是：主体人物 + 具体动作 + 所处环境\n"
-    "3. 只描述可直接视觉化的内容，不要写声音、气味、触感等不可见信息\n"
-    "4. 一般地，大部分构图采用中近景\n"
-    "5. 穿搭描述必须遵守可见性原则：只写画面里能看见的服装结构与层次，不写完全被遮挡的内容\n"
-    "6. 如果要调整动作姿势，则必须写完整，并且必须明确头部朝向与眼神朝向；笑容只用\"微笑\"\n"
-    "7. 光影自然真实\n"
-    "8. 整体目标是单人、自然、高清、写实的生活照，不是海报、插画、拼图或宣传图\n"
-    "9. 每条参考图描述后会附带具体指引，请严格按照指引处理该参考图，但指引不得违反最高优先级规则\n\n"
-    "### 强制要求\n"
-    "- 最终提示词必须使用中文\n"
-    "- 不得使用或生成任何文字、标识或象征性元素\n"
-    "- 人物的视觉年龄应符合设定\n"
-    "- 姿势必须物理可行。人物只有两只手和两条腿，不能同时处于矛盾状态，"
-    "尤其需要注意图片的描述与你所构建的提示词之间是否冲突\n"
-    "- 优先使用服装状态变化或动作间接营造性感效果，而非直接描述敏感身体部位\n"
-    "- 最终提示词必须以\"完全保留少女的面部特征与丰满的身材。\"结尾"
-)
-
 
 _DAILY_SELFIE_REF_HINT = (
     "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
@@ -205,22 +173,40 @@ def _build_strength_hint(ref_strength: str) -> str:
 
 
 _ROUND1_USER_PROMPT = (
-    "你在整理衣橱时发现，今天还有 {remaining} 次拍照额度没用完。\n\n"
+    "今天的拍照额度还剩 {remaining} 次。\n\n"
     "衣橱中可选的风格：\n{style_pool}\n\n"
     "近3天已拍过的风格：\n{recent_styles}\n\n"
-    "请选择 {remaining} 种不同的拍摄方案，每种方案用一句话描述（包含服装风格、场景、姿势）。\n"
-    "要求：风格多样化，优先选择近期未尝试的。\n\n"
-    "直接返回 {remaining} 条描述，每条一行。"
+    "请选择 {remaining} 种不同的风格。直接返回 {remaining} 个风格名称，每个一行。"
 )
 
-_ROUND2_USER_PROMPT = (
-    "本次选择的拍摄方案：\n{style_summary}\n\n"
-    "参考图描述（第{batch_num}批，共{total_batch}批）：\n"
-    "{descriptions}\n\n"
-    "请为以上 {count} 张参考图构建提示词。\n\n"
+_ROUND2_SCENE_SYSTEM_PROMPT = (
+    "【场景概念生成任务】\n\n"
+    "你是一位场景顾问，为写真拍摄构思场景概念。\n\n"
+    "核心任务：\n"
+    "生成 {count} 个不同的场景概念。每个场景概念用简短的一句话描述（如\"黄昏的天台\"\"雨夜的便利店\"\"午后的落地窗前\"），不做详细展开，详细设计由后续环节负责。\n\n"
+    "多样性要求（必须满足）：\n"
+    "- 室内与户外场景尽量分散，避免全部集中在同一种空间类型\n"
+    "- 涵盖日常场景（便利店、咖啡馆、书房）和氛围场景（天台、海边、雨夜街道）两类\n"
+    "- 不同时间段尽量分散，避免全部集中在同一时段（如全部是白天或全部是夜晚）\n"
+    "- 不同空间尺度尽量分散，避免全部是同类型空间（如全部是狭小室内或全部是开阔户外）\n"
+    "- 至少一半的场景为非典型写真拍摄地点（避免教室、图书馆、公园长椅、樱花树、海边沙滩等最常出现的场景；优先选择不常见但可执行的地点）\n\n"
     "约束：\n"
-    "- 直接返回 {count} 条提示词，每条一行\n"
+    "- 每条一行，不编号，不解释\n"
+    "- 只输出场景概念本身，不输出任何类型标签或分类说明\n"
     "- 禁止调用aiimg_generate工具"
+)
+
+_ROUND2_SCENE_USER_PROMPT = (
+    "请为写真拍摄构思 {count} 个不同的场景概念，需满足系统提示词中的多样性要求。每个场景用一句话简短描述。\n\n"
+    "直接返回 {count} 条场景描述，每条一行。"
+)
+
+_ROUND3_USER_PROMPT = (
+    "已配对的服装风格：\n{style_list}\n\n"
+    "已配对的场景概念：\n{scene_list}\n\n"
+    "以上风格与场景已按顺序一一配对（第1个风格配第1个场景，依此类推）。请为每一对设计完整的拍摄方案。\n\n"
+    "{ref_descriptions}\n\n"
+    "返回 {count} 个设计的 JSON 数组。"
 )
 
 _COSTUME_DESIGNER_SYSTEM_PROMPT = (
@@ -331,12 +317,6 @@ _COSTUME_DESIGNER_SYSTEM_PROMPT = (
     "- 若方案包含袜类或鞋类，则必须具体描述，不允许省略或一笔带过；若为裸足或光腿则明确写出\n"
     "- 发型是完整视觉造型的核心部分，每条方案都必须具体描述\n"
     "- 所有可见细节都必须达到上述\"细节具体化\"示例的标准"
-)
-
-_COSTUME_DESIGNER_USER_PROMPT = (
-    "请为以下 {count} 条拍摄方案设计详细的服装、动作和场景：\n\n"
-    "{queries}\n\n"
-    "返回 {count} 个设计的 JSON 数组。"
 )
 
 _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT = (
@@ -733,62 +713,6 @@ class DailySelfieService:
             return configured
         return None
 
-    async def _call_costume_designer(
-        self,
-        queries: list[str],
-        costume_provider_id: str,
-    ) -> list[dict] | None:
-        queries_text = "\n".join(f"- {q}" for q in queries)
-        user_prompt = _COSTUME_DESIGNER_USER_PROMPT.format(
-            count=len(queries), queries=queries_text,
-        )
-
-        if self._is_debug():
-            logger.info(
-                "[DailySelfie][DEBUG][CostumeDesigner] provider=%s\n"
-                "=== system_prompt ===\n%s\n"
-                "=== user_prompt ===\n%s",
-                costume_provider_id, _COSTUME_DESIGNER_SYSTEM_PROMPT, user_prompt,
-            )
-
-        for attempt in range(2):
-            try:
-                resp = await asyncio.wait_for(
-                    self.plugin.context.llm_generate(
-                        chat_provider_id=costume_provider_id,
-                        prompt=user_prompt,
-                        system_prompt=_COSTUME_DESIGNER_SYSTEM_PROMPT,
-                    ),
-                    timeout=360,
-                )
-                text = (getattr(resp, "completion_text", "") or "").strip()
-                if not text:
-                    logger.warning(
-                        "[DailySelfie] 创意设计师返回空文本(第%d次) queries=%d",
-                        attempt + 1, len(queries),
-                    )
-                    continue
-
-                if self._is_debug():
-                    logger.info(
-                        "[DailySelfie][DEBUG][CostumeDesigner] === response ===\n%s",
-                        text,
-                    )
-
-                designs = self._parse_costume_designer_json(text, len(queries))
-                if designs is not None:
-                    return designs
-                logger.warning(
-                    "[DailySelfie] 创意设计师 JSON 解析失败(第%d次)，原始文本: %s",
-                    attempt + 1, text[:200],
-                )
-            except asyncio.TimeoutError:
-                logger.warning("[DailySelfie] 创意设计师调用超时(第%d次)", attempt + 1)
-            except Exception as e:
-                logger.warning("[DailySelfie] 创意设计师调用失败(第%d次): %s", attempt + 1, e)
-
-        return None
-
     @staticmethod
     def _parse_costume_designer_json(text: str, expected_count: int) -> list[dict] | None:
         text = text.strip()
@@ -833,136 +757,6 @@ class DailySelfieService:
 
         return valid if valid else None
 
-    async def _call_prompt_engineer(
-        self,
-        designs: list[dict],
-        chat_provider_id: str,
-    ) -> list[str]:
-        designs_text = "\n".join(
-            f"- 服装：{d.get('clothing', '')} | 外观：{d.get('appearance', '')} | 动作：{d.get('pose', '')} | 场景：{d.get('scene', '')}"
-            for d in designs
-        )
-        user_prompt = _NO_REF_PROMPT_ENGINEER_USER_PROMPT.format(
-            count=len(designs), designs=designs_text,
-        )
-
-        if self._is_debug():
-            logger.info(
-                "[DailySelfie][DEBUG][PromptEngineer] provider=%s\n"
-                "=== system_prompt ===\n%s\n"
-                "=== user_prompt ===\n%s",
-                chat_provider_id, _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, user_prompt,
-            )
-
-        try:
-            resp = await asyncio.wait_for(
-                self.plugin.context.llm_generate(
-                    chat_provider_id=chat_provider_id,
-                    prompt=user_prompt,
-                    system_prompt=_NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT,
-                ),
-                timeout=120,
-            )
-            text = (getattr(resp, "completion_text", "") or "").strip()
-            if text:
-                return _parse_llm_lines(text, len(designs))
-            return []
-        except asyncio.TimeoutError:
-            logger.error("[DailySelfie] 提示词优化大师调用超时(120s)")
-            return []
-        except Exception as e:
-            logger.error("[DailySelfie] 提示词优化大师调用失败: %s", e)
-            return []
-
-    async def _process_no_ref_with_costume_designer(
-        self,
-        persona_name: str,
-        no_ref_queries: list[str],
-        costume_provider_id: str,
-        chat_provider_id: str,
-    ) -> list[str]:
-        batch_size = 3
-        all_prompts: list[str] = []
-
-        total_batches = (len(no_ref_queries) + batch_size - 1) // batch_size
-
-        for batch_num, batch_start in enumerate(range(0, len(no_ref_queries), batch_size), 1):
-            batch_queries = no_ref_queries[batch_start:batch_start + batch_size]
-            logger.info(
-                "[DailySelfie] 人格 %s 无图批次 %d/%d：豆包设计 %d 条",
-                persona_name, batch_num, total_batches, len(batch_queries),
-            )
-
-            designs = await self._call_costume_designer(batch_queries, costume_provider_id)
-
-            if designs is None:
-                logger.warning(
-                    "[DailySelfie] 人格 %s 无图批次 %d/%d 创意设计师失败，降级为自由发挥",
-                    persona_name, batch_num, total_batches,
-                )
-                fallback_descs = [
-                    f"（无参考图）拍摄方案：{q}\n"
-                    f"指引：请根据拍摄方案自由发挥，用自然连贯的长句构建完整提示词。"
-                    f"务必详细描述画面，包括场景、姿势、衣服的款式、材质、颜色、层次和穿着状态等信息，"
-                    f"确保画面生动具体，所有元素可视觉化，面部必须完整露出。"
-                    for q in batch_queries
-                ]
-                persona_system_prompt = self._get_persona_system_prompt(persona_name)
-                style_summary = "\n".join(f"- {q}" for q in batch_queries)
-                prompts = await self._llm_round2(
-                    chat_provider_id, persona_system_prompt, fallback_descs, len(fallback_descs),
-                    batch_num=1, total_batch=1, style_summary=style_summary,
-                )
-                all_prompts.extend(p.strip() for p in prompts if p.strip())
-                continue
-
-            actual_count = min(len(designs), len(batch_queries))
-            prompts = await self._call_prompt_engineer(designs[:actual_count], chat_provider_id)
-            logger.info(
-                "[DailySelfie] 人格 %s 无图批次 %d/%d 提示词优化大师返回 %d 条",
-                persona_name, batch_num, total_batches, len(prompts),
-            )
-            all_prompts.extend(p.strip() for p in prompts if p.strip())
-
-        return all_prompts
-
-    async def _process_no_ref_fallback(
-        self,
-        persona_name: str,
-        no_ref_queries: list[str],
-        chat_provider_id: str,
-        persona_system_prompt: str,
-    ) -> list[str]:
-        batch_size = 3
-        all_prompts: list[str] = []
-
-        descriptions = [
-            f"（无参考图）拍摄方案：{q}\n"
-            f"指引：请根据拍摄方案自由发挥，用自然连贯的长句构建完整提示词。"
-            f"务必详细描述画面，包括场景、姿势、衣服的款式、材质、颜色、层次和穿着状态等信息，"
-            f"确保画面生动具体，所有元素可视觉化，面部必须完整露出。"
-            for q in no_ref_queries
-        ]
-
-        style_summary = "\n".join(f"- {q}" for q in no_ref_queries)
-        total_batches = (len(descriptions) + batch_size - 1) // batch_size
-
-        for batch_num, batch_start in enumerate(range(0, len(descriptions), batch_size), 1):
-            batch_desc = descriptions[batch_start:batch_start + batch_size]
-
-            prompts = await self._llm_round2(
-                chat_provider_id, persona_system_prompt, batch_desc, len(batch_desc),
-                batch_num=batch_num, total_batch=total_batches,
-                style_summary=style_summary,
-            )
-            logger.info(
-                "[DailySelfie] 人格 %s 无图降级批次 %d/%d 返回 %d 条提示词",
-                persona_name, batch_num, total_batches, len(prompts),
-            )
-            all_prompts.extend(p.strip() for p in prompts if p.strip())
-
-        return all_prompts
-
     async def _process_persona_selfie(
         self,
         persona: dict,
@@ -988,12 +782,28 @@ class DailySelfieService:
         if not persona_system_prompt:
             logger.warning("[DailySelfie] 人格 %s 未找到 system prompt，使用空人格上下文", persona_name)
 
-        queries = await self._llm_round1(chat_provider_id, persona_system_prompt, remaining, style_pool, recent_styles)
-        if not queries:
-            logger.warning("[DailySelfie] 人格 %s LLM第1轮未返回查询", persona_name)
+        styles_task = self._llm_round1(chat_provider_id, persona_system_prompt, remaining, style_pool, recent_styles)
+        scenes_task = self._llm_round2_scene(chat_provider_id, remaining)
+
+        styles, scenes = await asyncio.gather(styles_task, scenes_task)
+
+        if not styles:
+            logger.warning("[DailySelfie] 人格 %s 第1轮(风格)未返回结果", persona_name)
+            return 0, 0
+        if not scenes:
+            logger.warning("[DailySelfie] 人格 %s 第2轮(场景)未返回结果", persona_name)
             return 0, 0
 
-        logger.info("[DailySelfie] 人格 %s LLM第1轮返回 %d 条查询", persona_name, len(queries))
+        pair_count = min(len(styles), len(scenes))
+        styles = styles[:pair_count]
+        scenes = scenes[:pair_count]
+
+        logger.info(
+            "[DailySelfie] 人格 %s 第1轮返回 %d 条风格，第2轮返回 %d 条场景，配对 %d 组",
+            persona_name, len(styles), len(scenes), pair_count,
+        )
+
+        search_queries = [f"{s} {c}" for s, c in zip(styles, scenes)]
 
         selfie_conf = self.plugin._get_feature("selfie")
         daily_ref_min_sim_raw = float(selfie_conf.get("daily_selfie_ref_min_similarity", 0) or 0)
@@ -1001,80 +811,98 @@ class DailySelfieService:
         if daily_ref_min_sim is not None:
             logger.info("[DailySelfie] 人格 %s 补拍搜图阈值: %s", persona_name, daily_ref_min_sim)
 
-        ref_results = await self._search_reference_images(queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
+        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
 
-        ref_by_query: dict[int, dict] = {}
+        ref_by_pair: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
-            if ref is not None and i < len(queries):
-                ref_by_query[i] = ref
+            if ref is not None and i < pair_count:
+                ref_by_pair[i] = ref
 
-        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 条查询）", persona_name, len(ref_results), len(queries))
+        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 组配对）", persona_name, len([r for r in ref_results if r is not None]), pair_count)
 
         persona_ref_count = len(self.plugin._get_persona_config_selfie_reference_paths(persona_name))
         search_ref_index = persona_ref_count + 1
 
-        with_ref_indices: list[int] = []
-        without_ref_indices: list[int] = []
-        for i, query in enumerate(queries):
-            ref = ref_by_query.get(i)
-            if ref and ref.get("description", ""):
-                with_ref_indices.append(i)
+        ref_descriptions: list[str] = []
+        ref_by_index: list[dict | None] = []
+        for i in range(pair_count):
+            ref = ref_by_pair.get(i)
+            if ref:
+                desc = ref.get("description", "")
+                if desc:
+                    ref_descriptions.append(
+                        f"参考图{search_ref_index}描述：{desc}\n\n{_DAILY_SELFIE_REF_HINT}\n\n"
+                        f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
+                    )
+                else:
+                    ref_descriptions.append("")
+                ref_by_index.append(ref)
             else:
-                without_ref_indices.append(i)
+                ref_descriptions.append("")
+                ref_by_index.append(None)
 
-        logger.info(
-            "[DailySelfie] 人格 %s 有图 %d 条，无图 %d 条",
-            persona_name, len(with_ref_indices), len(without_ref_indices),
-        )
+        costume_provider_id = self._get_costume_designer_provider_id(persona)
+        if not costume_provider_id:
+            costume_provider_id = chat_provider_id
+
+        batch_size = 3
+        all_designs: list[dict] = []
+        all_ref_by_design: list[dict | None] = []
+
+        total_batches = (pair_count + batch_size - 1) // batch_size
+
+        for batch_num, batch_start in enumerate(range(0, pair_count, batch_size), 1):
+            batch_styles = styles[batch_start:batch_start + batch_size]
+            batch_scenes = scenes[batch_start:batch_start + batch_size]
+            batch_refs_desc = ref_descriptions[batch_start:batch_start + batch_size]
+            batch_refs = ref_by_index[batch_start:batch_start + batch_size]
+
+            non_empty_refs = [d for d in batch_refs_desc if d]
+
+            logger.info(
+                "[DailySelfie] 人格 %s 第3轮批次 %d/%d：创意设计 %d 组",
+                persona_name, batch_num, total_batches, len(batch_styles),
+            )
+
+            designs = await self._llm_round3_design(
+                costume_provider_id, batch_styles, batch_scenes,
+                ref_descriptions=non_empty_refs if non_empty_refs else None,
+            )
+
+            if designs is None:
+                logger.warning(
+                    "[DailySelfie] 人格 %s 第3轮批次 %d/%d 创意设计失败，跳过",
+                    persona_name, batch_num, total_batches,
+                )
+                continue
+
+            actual_count = min(len(designs), len(batch_styles))
+            for i in range(actual_count):
+                all_designs.append(designs[i])
+                all_ref_by_design.append(batch_refs[i] if i < len(batch_refs) else None)
+
+        if not all_designs:
+            logger.warning("[DailySelfie] 人格 %s 未生成任何设计方案", persona_name)
+            return 0, 0
 
         all_prompts: list[tuple[str, dict | None]] = []
-        batch_size = 3
 
-        if with_ref_indices:
-            with_ref_descriptions: list[str] = []
-            with_ref_refs: list[dict | None] = []
-            for i in with_ref_indices:
-                ref = ref_by_query[i]
-                desc = ref.get("description", "")
-                hint = _DAILY_SELFIE_REF_HINT
-                with_ref_descriptions.append(
-                    f"参考图{search_ref_index}描述：{desc}\n\n{hint}\n\n"
-                    f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
-                )
-                with_ref_refs.append(ref)
+        design_batch_size = 3
+        design_total_batches = (len(all_designs) + design_batch_size - 1) // design_batch_size
 
-            style_summary = "\n".join(f"- {queries[i]}" for i in with_ref_indices)
-            total_batches = (len(with_ref_descriptions) + batch_size - 1) // batch_size
+        for batch_num, batch_start in enumerate(range(0, len(all_designs), design_batch_size), 1):
+            batch_designs = all_designs[batch_start:batch_start + design_batch_size]
+            batch_refs = all_ref_by_design[batch_start:batch_start + design_batch_size]
 
-            for batch_num, batch_start in enumerate(range(0, len(with_ref_descriptions), batch_size), 1):
-                batch_desc = with_ref_descriptions[batch_start:batch_start + batch_size]
-                batch_refs = with_ref_refs[batch_start:batch_start + batch_size]
+            prompts = await self._llm_round4_prompt(batch_designs, chat_provider_id)
+            logger.info(
+                "[DailySelfie] 人格 %s 第4轮批次 %d/%d 返回 %d 条提示词",
+                persona_name, batch_num, design_total_batches, len(prompts),
+            )
 
-                prompts = await self._llm_round2(
-                    chat_provider_id, persona_system_prompt, batch_desc, len(batch_desc),
-                    batch_num=batch_num, total_batch=total_batches,
-                    style_summary=style_summary,
-                )
-                logger.info("[DailySelfie] 人格 %s 有图批次 %d/%d 返回 %d 条提示词", persona_name, batch_num, total_batches, len(prompts))
-                for i, prompt in enumerate(prompts):
-                    if i < len(batch_refs):
-                        all_prompts.append((prompt.strip(), batch_refs[i]))
-
-        if without_ref_indices:
-            no_ref_queries = [queries[i] for i in without_ref_indices]
-            costume_provider_id = self._get_costume_designer_provider_id(persona)
-
-            if costume_provider_id:
-                no_ref_prompts = await self._process_no_ref_with_costume_designer(
-                    persona_name, no_ref_queries, costume_provider_id, chat_provider_id,
-                )
-            else:
-                no_ref_prompts = await self._process_no_ref_fallback(
-                    persona_name, no_ref_queries, chat_provider_id, persona_system_prompt,
-                )
-
-            for prompt in no_ref_prompts:
-                all_prompts.append((prompt, None))
+            for i, prompt in enumerate(prompts):
+                ref = batch_refs[i] if i < len(batch_refs) else None
+                all_prompts.append((prompt.strip(), ref))
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
@@ -1483,7 +1311,8 @@ class DailySelfieService:
         style_pool_text = "、".join(style_pool) if style_pool else "无可用风格"
         recent_text = "、".join(recent_styles) if recent_styles else "无"
 
-        system_prompt = f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}" if persona_system_prompt else _TASK_MODE_SYSTEM_PROMPT
+        task_system = _TASK_MODE_SYSTEM_PROMPT.format(count=remaining)
+        system_prompt = f"{persona_system_prompt}\n\n{task_system}" if persona_system_prompt else task_system
 
         user_prompt = _ROUND1_USER_PROMPT.format(
             remaining=remaining,
@@ -1533,39 +1362,20 @@ class DailySelfieService:
             logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
             return []
 
-    async def _llm_round2(
+    async def _llm_round2_scene(
         self,
         chat_provider_id: str,
-        persona_system_prompt: str,
-        descriptions: list[str],
         count: int,
-        *,
-        batch_num: int = 1,
-        total_batch: int = 1,
-        style_summary: str = "",
     ) -> list[str]:
-        desc_text = "\n".join(f"- {d}" for d in descriptions)
-
-        system_prompt = (
-            f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}\n\n{_SKILL_RULES_SYSTEM_PROMPT}"
-            if persona_system_prompt
-            else f"{_TASK_MODE_SYSTEM_PROMPT}\n\n{_SKILL_RULES_SYSTEM_PROMPT}"
-        )
-
-        user_prompt = _ROUND2_USER_PROMPT.format(
-            batch_num=batch_num,
-            total_batch=total_batch,
-            descriptions=desc_text,
-            count=count,
-            style_summary=style_summary,
-        )
+        system_prompt = _ROUND2_SCENE_SYSTEM_PROMPT.format(count=count)
+        user_prompt = _ROUND2_SCENE_USER_PROMPT.format(count=count)
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round2] batch=%d/%d chat_provider_id=%s\n"
+                "[DailySelfie][DEBUG][Round2-Scene] chat_provider_id=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
-                batch_num, total_batch, chat_provider_id, system_prompt, user_prompt,
+                chat_provider_id, system_prompt, user_prompt,
             )
 
         try:
@@ -1578,59 +1388,130 @@ class DailySelfieService:
                 timeout=120,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
-
-            tool_names = getattr(resp, "tools_call_name", None) or []
-            if tool_names:
-                logger.warning(
-                    "[DailySelfie] LLM第2轮返回了工具调用而非文本(已忽略): %s batch=%d/%d",
-                    tool_names, batch_num, total_batch,
-                )
-
             if not text:
-                logger.warning(
-                    "[DailySelfie] LLM第2轮返回空文本，尝试降级重试 batch=%d/%d\n"
-                    "  resp.role=%s tool_calls=%s result_chain=%s",
-                    batch_num, total_batch,
-                    getattr(resp, "role", "?"),
-                    tool_names,
-                    bool(getattr(resp, "result_chain", None)),
-                )
-                fallback_system = (
-                    f"{persona_system_prompt}\n\n{_TASK_MODE_SYSTEM_PROMPT}"
-                    if persona_system_prompt
-                    else _TASK_MODE_SYSTEM_PROMPT
-                )
-                try:
-                    resp2 = await asyncio.wait_for(
-                        self.plugin.context.llm_generate(
-                            chat_provider_id=chat_provider_id,
-                            prompt=user_prompt,
-                            system_prompt=fallback_system,
-                        ),
-                        timeout=120,
-                    )
-                    text = (getattr(resp2, "completion_text", "") or "").strip()
-                    if text:
-                        logger.info("[DailySelfie] LLM第2轮降级重试成功 batch=%d/%d text_len=%d", batch_num, total_batch, len(text))
-                    else:
-                        logger.error("[DailySelfie] LLM第2轮降级重试仍返回空文本 batch=%d/%d", batch_num, total_batch)
-                        return []
-                except Exception as e2:
-                    logger.error("[DailySelfie] LLM第2轮降级重试失败: %s", e2)
-                    return []
+                logger.warning("[DailySelfie] LLM第2轮(场景)返回空文本")
+                return []
 
             if self._is_debug():
                 logger.info(
-                    "[DailySelfie][DEBUG][Round2] batch=%d/%d === LLM response ===\n%s",
-                    batch_num, total_batch, text,
+                    "[DailySelfie][DEBUG][Round2-Scene] === LLM response ===\n%s",
+                    text,
                 )
 
             return _parse_llm_lines(text, count)
         except asyncio.TimeoutError:
-            logger.error("[DailySelfie] LLM第2轮调用超时(120s) batch=%d/%d", batch_num, total_batch)
+            logger.error("[DailySelfie] LLM第2轮(场景)调用超时(120s)")
             return []
         except Exception as e:
-            logger.error("[DailySelfie] LLM第2轮调用失败: %s", e)
+            logger.error("[DailySelfie] LLM第2轮(场景)调用失败: %s", e)
+            return []
+
+    async def _llm_round3_design(
+        self,
+        costume_provider_id: str,
+        styles: list[str],
+        scenes: list[str],
+        ref_descriptions: list[str] | None = None,
+    ) -> list[dict] | None:
+        style_list = "\n".join(f"- {s}" for s in styles)
+        scene_list = "\n".join(f"- {s}" for s in scenes)
+
+        ref_text = ""
+        if ref_descriptions:
+            ref_text = "\n".join(ref_descriptions)
+
+        user_prompt = _ROUND3_USER_PROMPT.format(
+            style_list=style_list,
+            scene_list=scene_list,
+            ref_descriptions=ref_text,
+            count=len(styles),
+        )
+
+        if self._is_debug():
+            logger.info(
+                "[DailySelfie][DEBUG][Round3-Design] provider=%s\n"
+                "=== system_prompt ===\n%s\n"
+                "=== user_prompt ===\n%s",
+                costume_provider_id, _COSTUME_DESIGNER_SYSTEM_PROMPT, user_prompt,
+            )
+
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=costume_provider_id,
+                        prompt=user_prompt,
+                        system_prompt=_COSTUME_DESIGNER_SYSTEM_PROMPT,
+                    ),
+                    timeout=360,
+                )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    logger.warning(
+                        "[DailySelfie] 第3轮(创意设计)返回空文本(第%d次)",
+                        attempt + 1,
+                    )
+                    continue
+
+                if self._is_debug():
+                    logger.info(
+                        "[DailySelfie][DEBUG][Round3-Design] === response ===\n%s",
+                        text,
+                    )
+
+                designs = self._parse_costume_designer_json(text, len(styles))
+                if designs is not None:
+                    return designs
+                logger.warning(
+                    "[DailySelfie] 第3轮(创意设计) JSON 解析失败(第%d次)，原始文本: %s",
+                    attempt + 1, text[:200],
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[DailySelfie] 第3轮(创意设计)调用超时(第%d次)", attempt + 1)
+            except Exception as e:
+                logger.warning("[DailySelfie] 第3轮(创意设计)调用失败(第%d次): %s", attempt + 1, e)
+
+        return None
+
+    async def _llm_round4_prompt(
+        self,
+        designs: list[dict],
+        chat_provider_id: str,
+    ) -> list[str]:
+        designs_text = "\n".join(
+            f"- 服装：{d.get('clothing', '')} | 外观：{d.get('appearance', '')} | 动作：{d.get('pose', '')} | 场景：{d.get('scene', '')}"
+            for d in designs
+        )
+        user_prompt = _NO_REF_PROMPT_ENGINEER_USER_PROMPT.format(
+            count=len(designs), designs=designs_text,
+        )
+
+        if self._is_debug():
+            logger.info(
+                "[DailySelfie][DEBUG][Round4-Prompt] provider=%s\n"
+                "=== system_prompt ===\n%s\n"
+                "=== user_prompt ===\n%s",
+                chat_provider_id, _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, user_prompt,
+            )
+
+        try:
+            resp = await asyncio.wait_for(
+                self.plugin.context.llm_generate(
+                    chat_provider_id=chat_provider_id,
+                    prompt=user_prompt,
+                    system_prompt=_NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT,
+                ),
+                timeout=120,
+            )
+            text = (getattr(resp, "completion_text", "") or "").strip()
+            if text:
+                return _parse_llm_lines(text, len(designs))
+            return []
+        except asyncio.TimeoutError:
+            logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(120s)")
+            return []
+        except Exception as e:
+            logger.error("[DailySelfie] 第4轮(提示词构建)调用失败: %s", e)
             return []
 
     async def _search_reference_images(
