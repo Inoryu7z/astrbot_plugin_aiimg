@@ -1163,9 +1163,21 @@ class DailySelfieService:
             return
 
         qzone_plugin = qzone_star.star_cls
+        if not hasattr(qzone_plugin, "controller") or qzone_plugin.controller is None:
+            logger.warning("[DailySelfie] qzone 插件 controller 不可用，跳过发布")
+            return
+
+        media_items: list[dict] = []
+        tmp_dir = Path(tempfile.gettempdir()) / "aiimg_qzone_publish"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        for idx, img_bytes in enumerate(image_data):
+            tmp_path = tmp_dir / f"qzone_publish_{uuid.uuid4().hex[:8]}_{idx}.jpg"
+            await asyncio.to_thread(tmp_path.write_bytes, img_bytes)
+            media_items.append({"source": str(tmp_path), "kind": "image", "trusted_local": True})
+
         try:
-            await qzone_plugin.service.publish_post(
-                text=caption, images=image_data
+            await qzone_plugin.controller.publish_post(
+                content=caption, media=media_items, content_sanitized=True
             )
             logger.info(
                 "[DailySelfie] 人格 %s 空间说说发布成功，共 %d 张图",
