@@ -1,3 +1,11 @@
+### v1.6.7
+
+**🔄 适配 QZone v4.0.0 Daemon API**
+
+*   适配 QZone 插件 v4.0.0 Daemon 架构重构：`service.publish_post()` → `controller.publish_post()`
+
+---
+
 ### v1.6.6
 
 **🚀 补拍架构重构：两轮→四轮**
