@@ -179,6 +179,7 @@ class GiteeAIImagePlugin(Star):
         self._image_tasks: set[asyncio.Task] = set()
 
         self._patch_tool_image_cache_runtime()
+        self._patch_agent_runner_for_direct_send()
 
         # 动态注册预设命令 (方案C: /手办化 直接触发)
         self._register_preset_commands()
@@ -525,6 +526,76 @@ class GiteeAIImagePlugin(Star):
                 "[compress_for_llm] 图片压缩失败: path=%s, err=%s", image_path, e
             )
             return None
+
+    def _patch_agent_runner_for_direct_send(self) -> None:
+        """Patch the framework's _handle_function_tools to change the instruction text
+        for aiimg tools when images have already been sent directly to users.
+
+        The framework hardcodes "Use send_message_to_user to send it to the user"
+        when a tool returns ImageContent. Since aiimg plugins send the lossless
+        original directly via event.send(), this instruction causes the LLM to
+        send the image again, resulting in duplicate images.
+
+        This patch replaces that instruction with "The image has already been sent
+        directly. Do NOT call send_message_to_user. Please generate a text response."
+        """
+        try:
+            from astrbot.core.agent.runners.tool_loop_agent_runner import (
+                ToolLoopAgentRunner,
+            )
+        except Exception as exc:
+            logger.debug(
+                "[GiteeAIImagePlugin] skip agent runner direct-send patch: %s", exc
+            )
+            return
+
+        if getattr(ToolLoopAgentRunner, "_aiimg_direct_send_patched", False):
+            return
+
+        original_method = ToolLoopAgentRunner._handle_function_tools
+
+        _AIIMG_PREFIXES = ("aiimg_",)
+        _ORIGINAL_INSTRUCTION = (
+            "Review the image below. Use send_message_to_user to send it to the user if satisfied, "
+            "with type='image' and path='"
+        )
+        _AIIMG_REPLACEMENT = (
+            "The image has already been sent to the user directly. "
+            "Do NOT call send_message_to_user to send it again. "
+            "Please generate a text response about the image based on what you see. "
+            "Cached at path='"
+        )
+
+        async def _patched_handle_function_tools(self_runner, req, llm_resp):
+            aiimg_tool_call_ids: set[str] = set()
+
+            async for result in original_method(self_runner, req, llm_resp):
+                if result.kind == "cached_image":
+                    cached_img = result.cached_image
+                    if cached_img and getattr(
+                        cached_img, "tool_name", ""
+                    ).startswith(_AIIMG_PREFIXES):
+                        aiimg_tool_call_ids.add(cached_img.tool_call_id)
+                elif result.kind == "tool_call_result_blocks":
+                    if aiimg_tool_call_ids:
+                        for block in result.tool_call_result_blocks:
+                            tc_id = getattr(block, "tool_call_id", None)
+                            if (
+                                tc_id in aiimg_tool_call_ids
+                                and isinstance(block.content, str)
+                                and _ORIGINAL_INSTRUCTION in block.content
+                            ):
+                                block.content = block.content.replace(
+                                    _ORIGINAL_INSTRUCTION,
+                                    _AIIMG_REPLACEMENT,
+                                )
+                yield result
+
+        ToolLoopAgentRunner._handle_function_tools = _patched_handle_function_tools
+        ToolLoopAgentRunner._aiimg_direct_send_patched = True
+        logger.info(
+            "[GiteeAIImagePlugin] agent runner direct-send patch active"
+        )
 
     def _register_preset_commands(self):
         """动态注册预设命令
@@ -2478,11 +2549,15 @@ class GiteeAIImagePlugin(Star):
             b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
             return mcp.types.CallToolResult(
                 content=[
+                    mcp.types.TextContent(
+                        type="text",
+                        text="图片已直接发送给用户，无需再次发送。请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
+                    ),
                     mcp.types.ImageContent(
                         type="image",
                         data=b64_data,
                         mimeType="image/jpeg",
-                    )
+                    ),
                 ]
             )
         except Exception as e:

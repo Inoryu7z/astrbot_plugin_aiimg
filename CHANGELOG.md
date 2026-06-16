@@ -1,3 +1,14 @@
+### v1.6.8
+
+**🐛 修复：image 模式下 LLM 重复发送图片**
+
+*   修复 image 上下文模式下，LLM 调用画图工具后重复调用 `send_message_to_user` 导致用户收到重复图片+多余文本的问题
+*   根因：AstrBot 框架在工具返回 `ImageContent` 时硬编码添加"Use send_message_to_user to send it to the user"指令，而插件已直接发送无损原图
+*   新增 `_patch_agent_runner_for_direct_send` 运行时补丁：将 aiimg 工具的框架指令替换为"图片已直接发送，不要再次发送，请生成文本回复"
+*   `_build_llm_tool_image_result` 返回值从纯 `ImageContent` 改为 `TextContent` + `ImageContent`，双重保障防止 LLM 重复发送
+
+---
+
 ### v1.6.7
 
 **🔄 适配 QZone v4.0.0 Daemon API**
