@@ -959,7 +959,7 @@ class OfficialGrokVideoService:
             self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
         )
 
-        self.default_size: str = str(self.settings.get("size", "16:9"))
+        self.default_size: str = str(self.settings.get("size", "1280x720"))
         self.default_duration: int = _clamp_int(
             self.settings.get("duration", 6), default=6, min_value=2, max_value=12
         )
