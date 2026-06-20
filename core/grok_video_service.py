@@ -937,6 +937,17 @@ class FakeGrokVideoService:
 class OfficialGrokVideoService:
     """官方 Grok 视频生成后端，使用 JSON body（兼容 xAI 官方 API 及其第三方代理）。"""
 
+    # 宽高比 → 像素尺寸映射（720p）
+    _ASPECT_RATIO_TO_SIZE = {
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "4:3": "960x720",
+        "3:4": "720x960",
+        "3:2": "1080x720",
+        "2:3": "720x1080",
+        "1:1": "720x720",
+    }
+
     def __init__(self, *, settings: dict):
         self.settings = settings if isinstance(settings, dict) else {}
 
@@ -959,15 +970,23 @@ class OfficialGrokVideoService:
             self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
         )
 
-        self.default_size: str = str(self.settings.get("size", "1280x720"))
+        self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "16:9"))
         self.default_duration: int = _clamp_int(
             self.settings.get("duration", 6), default=6, min_value=2, max_value=12
         )
+        # size_format: "pixel" 发送像素尺寸(如1280x720)，"ratio" 发送宽高比(如16:9)
+        self.size_format: str = str(self.settings.get("size_format", "pixel")).strip()
 
         self.create_url = urljoin(self.server_url + "/", "v1/videos")
         self.query_url = urljoin(self.server_url + "/", "v1/video/query")
 
-        logger.info("[OfficialGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
+        logger.info("[OfficialGrok] Initialized: model=%s, url=%s, size_format=%s", self.model, self.server_url, self.size_format)
+
+    def _resolve_size(self, aspect_ratio: str) -> str:
+        """根据宽高比和 size_format 解析出要发送的 size 值。"""
+        if self.size_format == "ratio":
+            return aspect_ratio
+        return self._ASPECT_RATIO_TO_SIZE.get(aspect_ratio, "1280x720")
 
     async def generate_video_url(
         self,
@@ -984,7 +1003,8 @@ class OfficialGrokVideoService:
             raise ValueError("缺少提示词")
 
         duration = kwargs.get("duration", self.default_duration)
-        size = kwargs.get("size", self.default_size)
+        aspect_ratio = kwargs.get("aspect_ratio", self.default_aspect_ratio)
+        size = self._resolve_size(aspect_ratio)
         image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
 
         if image_bytes:
