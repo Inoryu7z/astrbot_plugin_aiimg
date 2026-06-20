@@ -935,18 +935,12 @@ class FakeGrokVideoService:
 
 
 class OfficialGrokVideoService:
-    """官方 Grok 视频生成后端，使用 JSON body（兼容 xAI 官方 API 及其第三方代理）。"""
+    """官方 Grok 视频生成后端，严格遵循 xAI 官方 API 文档。
 
-    # 宽高比 → 像素尺寸映射（720p）
-    _ASPECT_RATIO_TO_SIZE = {
-        "16:9": "1280x720",
-        "9:16": "720x1280",
-        "4:3": "960x720",
-        "3:4": "720x960",
-        "3:2": "1080x720",
-        "2:3": "720x1080",
-        "1:1": "720x720",
-    }
+    接口：POST /v1/videos/generations 创建，GET /v1/videos/{request_id} 轮询
+    参数：aspect_ratio + resolution（无 size 字段）
+    模型：grok-imagine-video
+    """
 
     def __init__(self, *, settings: dict):
         self.settings = settings if isinstance(settings, dict) else {}
@@ -956,37 +950,26 @@ class OfficialGrokVideoService:
         ).rstrip("/")
         self.api_key: str = str(self.settings.get("api_key", "")).strip()
         self.model: str = (
-            str(self.settings.get("model", "grok-videos")).strip()
-            or "grok-videos"
+            str(self.settings.get("model", "grok-imagine-video")).strip()
+            or "grok-imagine-video"
         )
 
         self.timeout_seconds: int = _clamp_int(
             self.settings.get("timeout_seconds", 900), default=900, min_value=60, max_value=3600
         )
         self.polling_interval: int = _clamp_int(
-            self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
-        )
-        self.retry_delay: int = _clamp_int(
-            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+            self.settings.get("polling_interval", 5), default=5, min_value=2, max_value=30
         )
 
         self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "16:9"))
+        self.default_resolution: str = str(self.settings.get("resolution", "720p"))
         self.default_duration: int = _clamp_int(
-            self.settings.get("duration", 6), default=6, min_value=2, max_value=12
+            self.settings.get("duration", 6), default=6, min_value=1, max_value=15
         )
-        # size_format: "pixel" 发送像素尺寸(如1280x720)，"ratio" 发送宽高比(如16:9)
-        self.size_format: str = str(self.settings.get("size_format", "pixel")).strip()
 
-        self.create_url = urljoin(self.server_url + "/", "v1/videos")
-        self.query_url = urljoin(self.server_url + "/", "v1/video/query")
+        self.create_url = urljoin(self.server_url + "/", "v1/videos/generations")
 
-        logger.info("[OfficialGrok] Initialized: model=%s, url=%s, size_format=%s", self.model, self.server_url, self.size_format)
-
-    def _resolve_size(self, aspect_ratio: str) -> str:
-        """根据宽高比和 size_format 解析出要发送的 size 值。"""
-        if self.size_format == "ratio":
-            return aspect_ratio
-        return self._ASPECT_RATIO_TO_SIZE.get(aspect_ratio, "1280x720")
+        logger.info("[OfficialGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
 
     async def generate_video_url(
         self,
@@ -1004,7 +987,7 @@ class OfficialGrokVideoService:
 
         duration = kwargs.get("duration", self.default_duration)
         aspect_ratio = kwargs.get("aspect_ratio", self.default_aspect_ratio)
-        size = self._resolve_size(aspect_ratio)
+        resolution = kwargs.get("resolution", self.default_resolution)
         image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
 
         if image_bytes:
@@ -1035,11 +1018,12 @@ class OfficialGrokVideoService:
         body: dict = {
             "model": self.model,
             "prompt": prompt,
-            "seconds": duration,
-            "size": size,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution,
         }
         if image_url:
-            body["input_reference"] = image_url
+            body["image"] = image_url
             logger.info("[OfficialGrok] 附带参考图: image_url 长度=%s", len(image_url))
         else:
             logger.info("[OfficialGrok] 无参考图，纯文生视频模式")
@@ -1050,34 +1034,45 @@ class OfficialGrokVideoService:
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
 
         result = resp.json()
-        task_id = result.get("id")
-        if not task_id:
-            raise RuntimeError("响应中无 task id")
-        logger.info(f"[OfficialGrok] 任务创建: {task_id}")
+        request_id = result.get("request_id")
+        if not request_id:
+            raise RuntimeError(f"响应中无 request_id: {str(result)[:200]}")
+        logger.info(f"[OfficialGrok] 任务创建: {request_id}")
 
+        # 轮询：GET /v1/videos/{request_id}
+        poll_url = urljoin(self.server_url + "/", f"v1/videos/{request_id}")
         t_start = time.perf_counter()
         while True:
             if time.perf_counter() - t_start > self.timeout_seconds:
                 raise TimeoutError(f"任务超时 ({self.timeout_seconds}s)")
 
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                q_resp = await client.get(
-                    self.query_url, params={"id": task_id}, headers=headers
-                )
+                q_resp = await client.get(poll_url, headers=headers)
+            if q_resp.status_code != 200:
+                raise RuntimeError(f"轮询失败 HTTP {q_resp.status_code}: {q_resp.text[:300]}")
+
             q_data = q_resp.json()
             status = q_data.get("status")
 
-            if status == "completed" or status == "succeeded":
-                video_url = q_data.get("video_url")
+            if status == "done":
+                video_obj = q_data.get("video")
+                if isinstance(video_obj, dict):
+                    video_url = video_obj.get("url")
+                else:
+                    video_url = q_data.get("video_url")
                 if video_url:
-                    logger.info(f"[OfficialGrok] 任务完成: {task_id}")
+                    logger.info(f"[OfficialGrok] 任务完成: {request_id}")
                     return video_url
-                raise RuntimeError("任务完成但无 video_url")
+                raise RuntimeError(f"任务完成但无 video URL: {str(q_data)[:200]}")
             elif status == "failed":
-                raise RuntimeError(f"任务失败: {q_data}")
-            else:
+                error_obj = q_data.get("error", {})
+                error_msg = error_obj.get("message", str(q_data)) if isinstance(error_obj, dict) else str(q_data)
+                raise RuntimeError(f"任务失败: {error_msg}")
+            elif status == "expired":
+                raise RuntimeError("任务已过期")
+            else:  # pending
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
-                    logger.info(f"[OfficialGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
+                    logger.info(f"[OfficialGrok] 轮询中: request={request_id}, 已等待 {int(time.perf_counter() - t_start)}s")
                 await asyncio.sleep(self.polling_interval)
 
 

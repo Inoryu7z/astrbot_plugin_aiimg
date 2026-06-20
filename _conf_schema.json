@@ -1560,23 +1560,23 @@
             ],
             "default": "16:9"
           },
-          "size_format": {
+          "resolution": {
             "type": "string",
-            "description": "size 字段格式",
-            "hint": "pixel: 发送像素尺寸(如1280x720)，适用于只接受像素尺寸的代理；ratio: 发送宽高比(如16:9)，适用于官方 API",
+            "description": "视频分辨率",
+            "hint": "720p: HD 质量；480p: 标清，生成更快",
             "options": [
-              "pixel",
-              "ratio"
+              "720p",
+              "480p"
             ],
-            "default": "pixel"
+            "default": "720p"
           },
           "duration": {
             "type": "int",
             "description": "视频时长(秒)",
-            "hint": "Grok 视频支持 2~12 秒。",
+            "hint": "官方 API 支持 1~15 秒",
             "slider": {
-              "min": 2,
-              "max": 12,
+              "min": 1,
+              "max": 15,
               "step": 1
             },
             "default": 6
