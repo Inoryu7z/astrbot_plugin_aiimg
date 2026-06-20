@@ -1546,17 +1546,29 @@
             },
             "default": 2
           },
-          "size": {
+          "aspect_ratio": {
             "type": "string",
-            "description": "视频尺寸",
-            "hint": "官方 API 要求像素尺寸格式",
+            "description": "视频宽高比",
             "options": [
-              "848x480",
-              "1280x720",
-              "1696x960",
-              "1920x1080"
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4",
+              "3:2",
+              "2:3",
+              "1:1"
             ],
-            "default": "1280x720"
+            "default": "16:9"
+          },
+          "size_format": {
+            "type": "string",
+            "description": "size 字段格式",
+            "hint": "pixel: 发送像素尺寸(如1280x720)，适用于只接受像素尺寸的代理；ratio: 发送宽高比(如16:9)，适用于官方 API",
+            "options": [
+              "pixel",
+              "ratio"
+            ],
+            "default": "pixel"
           },
           "duration": {
             "type": "int",
