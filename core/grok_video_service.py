@@ -752,29 +752,29 @@ class RealGrokVideoService:
                     len(image_bytes),
                 )
 
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
 
-        data = {
-            "model": (None, self.model),
-            "prompt": (None, prompt),
-            "seconds": (None, str(duration)),
-            "size": (None, size),
+        body: dict = {
+            "model": self.model,
+            "prompt": prompt,
+            "seconds": duration,
+            "size": size,
         }
         if image_url and image_url.startswith(("http://", "https://")):
-            data["input_reference"] = (None, image_url)
+            body["input_reference"] = image_url
             logger.info("[RealGrok] 附带参考图: image_url 长度=%s", len(image_url))
-        elif image_url:
-            data["input_reference"] = (None, image_url)
-            logger.info("[RealGrok] 附带参考图(非HTTP URL): image_url 长度=%s", len(image_url))
         elif image_bytes:
-            data["input_reference"] = ("image.jpg", image_bytes, "image/jpeg")
-            logger.info("[RealGrok] 附带参考图: 压缩后 bytes 大小=%s", len(image_bytes))
+            body["input_reference"] = _build_data_url(image_bytes)
+            logger.info("[RealGrok] 附带参考图: data URL 长度=%s", len(body["input_reference"]))
         else:
             logger.info("[RealGrok] 无参考图，纯文生视频模式")
 
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.post(self.create_url, files=data, headers=headers)
+            resp = await client.post(self.create_url, json=body, headers=headers)
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
 
@@ -931,6 +931,133 @@ class FakeGrokVideoService:
             else:
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
                     logger.info(f"[FakeGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
+                await asyncio.sleep(self.polling_interval)
+
+
+class OfficialGrokVideoService:
+    """官方 Grok 视频生成后端，使用 JSON body（兼容 xAI 官方 API 及其第三方代理）。"""
+
+    def __init__(self, *, settings: dict):
+        self.settings = settings if isinstance(settings, dict) else {}
+
+        self.server_url: str = str(
+            self.settings.get("server_url", "https://api.x.ai")
+        ).rstrip("/")
+        self.api_key: str = str(self.settings.get("api_key", "")).strip()
+        self.model: str = (
+            str(self.settings.get("model", "grok-videos")).strip()
+            or "grok-videos"
+        )
+
+        self.timeout_seconds: int = _clamp_int(
+            self.settings.get("timeout_seconds", 900), default=900, min_value=60, max_value=3600
+        )
+        self.polling_interval: int = _clamp_int(
+            self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
+        )
+        self.retry_delay: int = _clamp_int(
+            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+        )
+
+        self.default_size: str = str(self.settings.get("size", "16:9"))
+        self.default_duration: int = _clamp_int(
+            self.settings.get("duration", 6), default=6, min_value=2, max_value=12
+        )
+
+        self.create_url = urljoin(self.server_url + "/", "v1/videos")
+        self.query_url = urljoin(self.server_url + "/", "v1/video/query")
+
+        logger.info("[OfficialGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
+
+    async def generate_video_url(
+        self,
+        prompt: str,
+        image_bytes: bytes | None = None,
+        *,
+        preset: str | None = None,
+        **kwargs
+    ) -> str:
+        if not self.api_key:
+            raise RuntimeError("Missing API key")
+
+        if not prompt.strip():
+            raise ValueError("缺少提示词")
+
+        duration = kwargs.get("duration", self.default_duration)
+        size = kwargs.get("size", self.default_size)
+        image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
+
+        if image_bytes:
+            original_bytes_size = len(image_bytes)
+            image_bytes = _compress_image_bytes_for_video(image_bytes)
+            if not image_url or not image_url.startswith(("http://", "https://")):
+                image_url = _build_data_url(image_bytes)
+                logger.info(
+                    "[OfficialGrok] image_url 非远程链接，已从 image_bytes 构建 data URL: "
+                    "原始=%s bytes, 压缩后=%s bytes, data URL 长度=%s",
+                    original_bytes_size,
+                    len(image_bytes),
+                    len(image_url),
+                )
+            else:
+                logger.info(
+                    "[OfficialGrok] 图片已压缩: %s -> %s bytes, 使用传入的 image_url",
+                    original_bytes_size,
+                    len(image_bytes),
+                )
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
+
+        body: dict = {
+            "model": self.model,
+            "prompt": prompt,
+            "seconds": duration,
+            "size": size,
+        }
+        if image_url:
+            body["input_reference"] = image_url
+            logger.info("[OfficialGrok] 附带参考图: image_url 长度=%s", len(image_url))
+        else:
+            logger.info("[OfficialGrok] 无参考图，纯文生视频模式")
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.post(self.create_url, json=body, headers=headers)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
+
+        result = resp.json()
+        task_id = result.get("id")
+        if not task_id:
+            raise RuntimeError("响应中无 task id")
+        logger.info(f"[OfficialGrok] 任务创建: {task_id}")
+
+        t_start = time.perf_counter()
+        while True:
+            if time.perf_counter() - t_start > self.timeout_seconds:
+                raise TimeoutError(f"任务超时 ({self.timeout_seconds}s)")
+
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                q_resp = await client.get(
+                    self.query_url, params={"id": task_id}, headers=headers
+                )
+            q_data = q_resp.json()
+            status = q_data.get("status")
+
+            if status == "completed" or status == "succeeded":
+                video_url = q_data.get("video_url")
+                if video_url:
+                    logger.info(f"[OfficialGrok] 任务完成: {task_id}")
+                    return video_url
+                raise RuntimeError("任务完成但无 video_url")
+            elif status == "failed":
+                raise RuntimeError(f"任务失败: {q_data}")
+            else:
+                if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
+                    logger.info(f"[OfficialGrok] 轮询中: task={task_id}, 已等待 {int(time.perf_counter() - t_start)}s")
                 await asyncio.sleep(self.polling_interval)
 
 
