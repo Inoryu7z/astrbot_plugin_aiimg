@@ -1486,8 +1486,8 @@
       },
       "official_grok_video": {
         "name": "官方 Grok（视频）",
-        "description": "兼容 xAI 官方 Grok 视频生成 API 的后端，使用 JSON body 格式。适用于官方 API 及其第三方代理。",
-        "hint": "仅对 features.video.chain 生效。server_url 填官方地址 https://api.x.ai 或第三方代理地址。",
+        "description": "兼容 xAI 官方 Grok 视频生成 API 的后端，使用 JSON body 格式。适用于官方 API 及其第三方代理（如云雾已兼容官方格式）。",
+        "hint": "仅对 features.video.chain 生效。server_url 填官方地址 https://api.x.ai 或第三方代理地址（如 https://yunwu.ai）。",
         "items": {
           "id": {
             "type": "string",
@@ -1502,7 +1502,7 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "官方：https://api.x.ai，第三方代理填对应地址",
+            "hint": "官方：https://api.x.ai；云雾（已兼容官方格式）：https://yunwu.ai；其他第三方代理填对应地址",
             "default": "https://api.x.ai"
           },
           "api_key": {
@@ -1514,7 +1514,8 @@
           "model": {
             "type": "string",
             "description": "模型名称",
-            "default": "grok-videos"
+            "hint": "可选：grok-imagine-video / grok-imagine-video-1.5-preview",
+            "default": "grok-imagine-video"
           },
           "timeout_seconds": {
             "type": "int",

@@ -1,3 +1,15 @@
+### v1.6.9
+
+**🚀 官方 Grok 视频后端适配云雾官方兼容格式**
+
+*   修复 `OfficialGrokVideoService` 的 `image` 字段格式 Bug：从字符串改为 `{"url": ...}` 对象格式，符合 xAI 官方 API 规范（否则图生视频参考图无法识别）
+*   新增 `reference_images` 多参考图数组支持（与 `image` 互斥），格式为 `[{"url": "..."}]`
+*   新增 `edit_video_url` 方法：`POST /v1/videos/edits`，接收 `video: {"url": "..."}` 进行视频编辑
+*   提取 `_poll_video_task` 共享轮询逻辑，消除 generate 与 edit 的重复代码
+*   配置默认 model 从 `grok-videos` 改为 `grok-imagine-video`，server_url hint 补充云雾地址
+
+---
+
 ### v1.6.8
 
 **🐛 修复：image 模式下 LLM 重复发送图片**
