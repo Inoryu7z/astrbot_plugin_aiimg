@@ -968,6 +968,7 @@ class OfficialGrokVideoService:
         )
 
         self.create_url = urljoin(self.server_url + "/", "v1/videos/generations")
+        self.edit_url = urljoin(self.server_url + "/", "v1/videos/edits")
 
         logger.info("[OfficialGrok] Initialized: model=%s, url=%s", self.model, self.server_url)
 
@@ -989,6 +990,13 @@ class OfficialGrokVideoService:
         aspect_ratio = kwargs.get("aspect_ratio", self.default_aspect_ratio)
         resolution = kwargs.get("resolution", self.default_resolution)
         image_url: str | None = str(kwargs.get("image_url", "") or "").strip() or None
+        # reference_images: list of remote URLs, mutually exclusive with image
+        raw_ref_images = kwargs.get("reference_images") or []
+        reference_images: list[str] = [
+            str(u or "").strip()
+            for u in raw_ref_images
+            if str(u or "").strip().startswith(("http://", "https://"))
+        ]
 
         if image_bytes:
             original_bytes_size = len(image_bytes)
@@ -1022,9 +1030,15 @@ class OfficialGrokVideoService:
             "aspect_ratio": aspect_ratio,
             "resolution": resolution,
         }
+        # image 与 reference_images 互斥：优先 image（单图），其次 reference_images（多图）
         if image_url:
-            body["image"] = image_url
+            body["image"] = {"url": image_url}
             logger.info("[OfficialGrok] 附带参考图: image_url 长度=%s", len(image_url))
+        elif reference_images:
+            body["reference_images"] = [{"url": u} for u in reference_images]
+            logger.info(
+                "[OfficialGrok] 附带参考图组: reference_images 数量=%s", len(reference_images)
+            )
         else:
             logger.info("[OfficialGrok] 无参考图，纯文生视频模式")
 
@@ -1039,7 +1053,68 @@ class OfficialGrokVideoService:
             raise RuntimeError(f"响应中无 request_id: {str(result)[:200]}")
         logger.info(f"[OfficialGrok] 任务创建: {request_id}")
 
-        # 轮询：GET /v1/videos/{request_id}
+        return await self._poll_video_task(request_id, headers=headers, timeout=timeout)
+
+    async def edit_video_url(
+        self,
+        prompt: str,
+        video_url: str,
+        *,
+        preset: str | None = None,
+        **kwargs,
+    ) -> str:
+        """编辑视频：POST /v1/videos/edits
+
+        参数：model, prompt, resolution, aspect_ratio, video: {"url": "..."}
+        与 generate 共用轮询逻辑：GET /v1/videos/{request_id}
+        """
+        if not self.api_key:
+            raise RuntimeError("Missing API key")
+        if not prompt.strip():
+            raise ValueError("缺少提示词")
+        video_url = str(video_url or "").strip()
+        if not video_url.startswith(("http://", "https://")):
+            raise ValueError("video_url 必须是 http/https 远程链接")
+
+        aspect_ratio = kwargs.get("aspect_ratio", self.default_aspect_ratio)
+        resolution = kwargs.get("resolution", self.default_resolution)
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=130.0)
+
+        body: dict = {
+            "model": self.model,
+            "prompt": prompt,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+            "video": {"url": video_url},
+        }
+        logger.info("[OfficialGrok] 编辑视频: video_url 长度=%s", len(video_url))
+
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.post(self.edit_url, json=body, headers=headers)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
+
+        result = resp.json()
+        request_id = result.get("request_id")
+        if not request_id:
+            raise RuntimeError(f"响应中无 request_id: {str(result)[:200]}")
+        logger.info(f"[OfficialGrok] 编辑任务创建: {request_id}")
+
+        return await self._poll_video_task(request_id, headers=headers, timeout=timeout)
+
+    async def _poll_video_task(
+        self,
+        request_id: str,
+        *,
+        headers: dict,
+        timeout: httpx.Timeout,
+    ) -> str:
+        """轮询 GET /v1/videos/{request_id} 直到任务完成或失败。"""
         poll_url = urljoin(self.server_url + "/", f"v1/videos/{request_id}")
         t_start = time.perf_counter()
         while True:
