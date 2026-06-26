@@ -2438,7 +2438,7 @@ class GiteeAIImagePlugin(Star):
     # ==================== 自拍参考照：内部实现 ====================
 
     def _get_selfie_persona_config(self, index: int) -> dict:
-        """获取指定索引的人格自拍配置（1 或 2）"""
+        """获取指定索引的人格自拍配置（1、2 或 3）"""
         conf = self._get_feature(f"selfie_persona_{index}")
         return conf if isinstance(conf, dict) else {}
 
@@ -2632,7 +2632,7 @@ class GiteeAIImagePlugin(Star):
         try:
             persona_name = await self._get_current_persona_name(event)
             if persona_name:
-                for idx in [1, 2]:
+                for idx in [1, 2, 3]:
                     conf = self._get_selfie_persona_config(idx)
                     if not conf:
                         continue
@@ -2692,9 +2692,9 @@ class GiteeAIImagePlugin(Star):
     def _get_persona_config_selfie_reference_paths(
             self, persona_name: str
     ) -> list[Path]:
-        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的参考照"""
+        """从 selfie_persona_1/2/3 查找匹配人格的参考照"""
         logger.debug("[selfie_ref] 查找人格配置: persona_name=%r", persona_name)
-        for idx in [1, 2]:
+        for idx in [1, 2, 3]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
                 logger.debug("[selfie_ref] selfie_persona_%s 无配置", idx)
@@ -2837,8 +2837,8 @@ class GiteeAIImagePlugin(Star):
         return f"{prefix}\n\n{user_prompt}"
 
     def _get_persona_selfie_chain(self, persona_name: str) -> list[dict] | None:
-        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的链路"""
-        for idx in [1, 2]:
+        """从 selfie_persona_1/2/3 查找匹配人格的链路"""
+        for idx in [1, 2, 3]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
                 continue
@@ -2869,8 +2869,8 @@ class GiteeAIImagePlugin(Star):
         return None
 
     def _get_persona_video_chain(self, persona_name: str) -> list[str] | None:
-        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的视频链路"""
-        for idx in [1, 2]:
+        """从 selfie_persona_1/2/3 查找匹配人格的视频链路"""
+        for idx in [1, 2, 3]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
                 continue
@@ -2885,8 +2885,8 @@ class GiteeAIImagePlugin(Star):
         return None
 
     def _get_persona_selfie_config(self, persona_name: str) -> dict | None:
-        """从 selfie_persona_1 或 selfie_persona_2 查找匹配人格的完整配置"""
-        for idx in [1, 2]:
+        """从 selfie_persona_1/2/3 查找匹配人格的完整配置"""
+        for idx in [1, 2, 3]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
                 continue
@@ -3167,7 +3167,7 @@ class GiteeAIImagePlugin(Star):
             self, event: AstrMessageEvent, persona_name: str | None = None
     ):
         # 注意：此方法仅删除通过 /自拍参考 设置 命令保存的参考照（ReferenceStore）。
-        # WebUI 中 selfie_persona_1/2 配置的参考照不受影响，仍会继续生效。
+        # WebUI 中 selfie_persona_1/2/3 配置的参考照不受影响，仍会继续生效。
         # 这是设计意图：WebUI 配置属于持久化配置，不应通过命令删除。
 
         store_key = self._get_selfie_ref_store_key(event, persona_name=persona_name)

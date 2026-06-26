@@ -521,7 +521,7 @@ class DailySelfieService:
 
     def _get_enabled_personas(self) -> list[dict[str, Any]]:
         personas = []
-        for idx in [1, 2]:
+        for idx in [1, 2, 3]:
             conf = self.plugin._get_selfie_persona_config(idx)
             if not conf:
                 logger.debug("[DailySelfie] selfie_persona_%d 无配置，跳过", idx)
