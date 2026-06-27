@@ -732,6 +732,14 @@ class DailySelfieService:
             return configured
         return _COSTUME_DESIGNER_SYSTEM_PROMPT
 
+    def _get_prompt_engineer_system_prompt(self, persona: dict) -> str:
+        """读取人格级提示词构建系统提示词，留空则回退到内置默认常量。"""
+        persona_conf = persona.get("config", {})
+        configured = str(persona_conf.get("prompt_engineer_system_prompt", "") or "").strip()
+        if configured:
+            return configured
+        return _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+
     @staticmethod
     def _parse_costume_designer_json(text: str, expected_count: int) -> list[dict] | None:
         text = text.strip()
@@ -865,6 +873,7 @@ class DailySelfieService:
             costume_provider_id = chat_provider_id
 
         costume_system_prompt = self._get_costume_designer_system_prompt(persona)
+        prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona)
 
         batch_size = 3
         all_designs: list[dict] = []
@@ -916,7 +925,7 @@ class DailySelfieService:
             batch_designs = all_designs[batch_start:batch_start + design_batch_size]
             batch_refs = all_ref_by_design[batch_start:batch_start + design_batch_size]
 
-            prompts = await self._llm_round4_prompt(batch_designs, chat_provider_id)
+            prompts = await self._llm_round4_prompt(batch_designs, chat_provider_id, system_prompt=prompt_engineer_system_prompt)
             logger.info(
                 "[DailySelfie] 人格 %s 第4轮批次 %d/%d 返回 %d 条提示词",
                 persona_name, batch_num, design_total_batches, len(prompts),
@@ -1514,6 +1523,7 @@ class DailySelfieService:
         self,
         designs: list[dict],
         chat_provider_id: str,
+        system_prompt: str = "",
     ) -> list[str]:
         designs_text = "\n".join(
             f"- 服装：{d.get('clothing', '')} | 外观：{d.get('appearance', '')} | 动作：{d.get('pose', '')} | 场景：{d.get('scene', '')}"
@@ -1523,12 +1533,14 @@ class DailySelfieService:
             count=len(designs), designs=designs_text,
         )
 
+        effective_prompt = system_prompt or _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+
         if self._is_debug():
             logger.info(
                 "[DailySelfie][DEBUG][Round4-Prompt] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
-                chat_provider_id, _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, user_prompt,
+                chat_provider_id, effective_prompt, user_prompt,
             )
 
         try:
@@ -1536,7 +1548,7 @@ class DailySelfieService:
                 self.plugin.context.llm_generate(
                     chat_provider_id=chat_provider_id,
                     prompt=user_prompt,
-                    system_prompt=_NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT,
+                    system_prompt=effective_prompt,
                 ),
                 timeout=120,
             )
