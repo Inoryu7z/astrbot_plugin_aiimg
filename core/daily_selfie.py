@@ -723,6 +723,14 @@ class DailySelfieService:
             return configured
         return None
 
+    def _get_costume_designer_system_prompt(self, persona: dict) -> str:
+        """读取人格级创意设计系统提示词，留空则回退到内置默认常量。"""
+        persona_conf = persona.get("config", {})
+        configured = str(persona_conf.get("costume_designer_system_prompt", "") or "").strip()
+        if configured:
+            return configured
+        return _COSTUME_DESIGNER_SYSTEM_PROMPT
+
     @staticmethod
     def _parse_costume_designer_json(text: str, expected_count: int) -> list[dict] | None:
         text = text.strip()
@@ -855,6 +863,8 @@ class DailySelfieService:
         if not costume_provider_id:
             costume_provider_id = chat_provider_id
 
+        costume_system_prompt = self._get_costume_designer_system_prompt(persona)
+
         batch_size = 3
         all_designs: list[dict] = []
         all_ref_by_design: list[dict | None] = []
@@ -877,6 +887,7 @@ class DailySelfieService:
             designs = await self._llm_round3_design(
                 costume_provider_id, batch_styles, batch_scenes,
                 ref_descriptions=non_empty_refs if non_empty_refs else None,
+                system_prompt=costume_system_prompt,
             )
 
             if designs is None:
@@ -1434,6 +1445,7 @@ class DailySelfieService:
         styles: list[str],
         scenes: list[str],
         ref_descriptions: list[str] | None = None,
+        system_prompt: str = "",
     ) -> list[dict] | None:
         style_list = "\n".join(f"- {s}" for s in styles)
         scene_list = "\n".join(f"- {s}" for s in scenes)
@@ -1449,12 +1461,14 @@ class DailySelfieService:
             count=len(styles),
         )
 
+        effective_prompt = system_prompt or _COSTUME_DESIGNER_SYSTEM_PROMPT
+
         if self._is_debug():
             logger.info(
                 "[DailySelfie][DEBUG][Round3-Design] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
-                costume_provider_id, _COSTUME_DESIGNER_SYSTEM_PROMPT, user_prompt,
+                costume_provider_id, effective_prompt, user_prompt,
             )
 
         for attempt in range(2):
@@ -1463,7 +1477,7 @@ class DailySelfieService:
                     self.plugin.context.llm_generate(
                         chat_provider_id=costume_provider_id,
                         prompt=user_prompt,
-                        system_prompt=_COSTUME_DESIGNER_SYSTEM_PROMPT,
+                        system_prompt=effective_prompt,
                     ),
                     timeout=360,
                 )
