@@ -639,7 +639,6 @@ class DailySelfieService:
         )
 
         try:
-            style_pool = await self._get_style_pool(wardrobe)
             recent_styles = await self._get_recent_styles(wardrobe)
 
             for p in personas:
@@ -649,6 +648,8 @@ class DailySelfieService:
                 if total_remaining <= 0:
                     logger.info("[DailySelfie] 人格 %s 所有提供商额度已用完，跳过", p["persona_name"])
                     continue
+
+                style_pool = await self._get_style_pool(wardrobe, p["persona_name"])
 
                 s, f = await self._process_persona_selfie(
                     p, wardrobe, style_pool, recent_styles, total_remaining, request_interval, umo
@@ -1580,8 +1581,16 @@ class DailySelfieService:
         await asyncio.gather(*[_search_one(i, q) for i, q in enumerate(queries)])
         return results
 
-    async def _get_style_pool(self, wardrobe: Any) -> list[str]:
+    async def _get_style_pool(self, wardrobe: Any, persona_name: str = "") -> list[str]:
         try:
+            if persona_name and hasattr(wardrobe, "get_style_pool_for_persona"):
+                persona_pool = await wardrobe.get_style_pool_for_persona(persona_name)
+                if persona_pool:
+                    logger.info(
+                        "[DailySelfie] 人格 %s 使用自定义风格池 (%d 项)",
+                        persona_name, len(persona_pool),
+                    )
+                    return persona_pool
             if hasattr(wardrobe, "get_merged_pools"):
                 pools = await wardrobe.get_merged_pools()
                 return list(pools.get("style", []))
