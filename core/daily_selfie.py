@@ -913,8 +913,8 @@ class DailySelfieService:
                 all_ref_by_design.append(batch_refs[i] if i < len(batch_refs) else None)
 
         if not all_designs:
-            logger.warning("[DailySelfie] 人格 %s 未生成任何设计方案", persona_name)
-            return 0, 0
+            logger.warning("[DailySelfie] 人格 %s 未生成任何设计方案，%d 个额度全部计入失败", persona_name, remaining)
+            return 0, remaining
 
         all_prompts: list[tuple[str, dict | None]] = []
 
@@ -936,8 +936,8 @@ class DailySelfieService:
                 all_prompts.append((prompt.strip(), ref))
 
         if not all_prompts:
-            logger.warning("[DailySelfie] 人格 %s 未生成任何提示词", persona_name)
-            return 0, 0
+            logger.warning("[DailySelfie] 人格 %s 未生成任何提示词，%d 个额度全部计入失败", persona_name, remaining)
+            return 0, remaining
 
         logger.info("[DailySelfie] 人格 %s 生成 %d 条提示词，开始并发画图", persona_name, len(all_prompts))
 
@@ -1378,7 +1378,7 @@ class DailySelfieService:
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                 ),
-                timeout=120,
+                timeout=360,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
@@ -1399,7 +1399,7 @@ class DailySelfieService:
 
             return _parse_llm_lines(text, remaining)
         except asyncio.TimeoutError:
-            logger.error("[DailySelfie] LLM第1轮调用超时(120s)")
+            logger.error("[DailySelfie] LLM第1轮调用超时(360s)")
             return []
         except Exception as e:
             logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
@@ -1428,7 +1428,7 @@ class DailySelfieService:
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                 ),
-                timeout=120,
+                timeout=360,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
@@ -1443,7 +1443,7 @@ class DailySelfieService:
 
             return _parse_llm_lines(text, count)
         except asyncio.TimeoutError:
-            logger.error("[DailySelfie] LLM第2轮(场景)调用超时(120s)")
+            logger.error("[DailySelfie] LLM第2轮(场景)调用超时(360s)")
             return []
         except Exception as e:
             logger.error("[DailySelfie] LLM第2轮(场景)调用失败: %s", e)
@@ -1550,14 +1550,14 @@ class DailySelfieService:
                     prompt=user_prompt,
                     system_prompt=effective_prompt,
                 ),
-                timeout=120,
+                timeout=360,
             )
             text = (getattr(resp, "completion_text", "") or "").strip()
             if text:
                 return _parse_llm_lines(text, len(designs))
             return []
         except asyncio.TimeoutError:
-            logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(120s)")
+            logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(360s)")
             return []
         except Exception as e:
             logger.error("[DailySelfie] 第4轮(提示词构建)调用失败: %s", e)
