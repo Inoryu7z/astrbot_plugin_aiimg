@@ -1,3 +1,31 @@
+### v1.8.0
+
+**🚀 视频后端重构：移除云雾旧格式 + 新增 Grok Video 3 multipart 后端**
+
+*   移除「真 Grok」（yunwu_grok_video，基于 yunwu.ai `/v1/videos` + `/v1/video/query`）和「假 Grok」（yunwu_grok_video_3，基于 yunwu.ai `/v1/video/create` + `/v1/video/query`）两个视频后端，不再支持云雾旧格式 API（不做兼容迁移）
+*   新增 `grok_video_3` 视频后端模板：基于 multipart/form-data 协议，适用于 PoloAI（https://poloai.top）和 s.apifox 等兼容接口
+    *   POST `/v1/videos`（multipart）：model / prompt / aspect_ratio(2:3,3:2,1:1) / seconds / size(720P,1080P) / input_reference(文件上传)
+    *   GET `/v1/videos/{task_id}` 轮询：status(queued/processing/completed/failed/cancelled)，完成返回 video_url
+    *   支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s) 三种模型
+    *   参考图支持远程 URL 和本地文件上传两种方式（自动压缩）
+*   `OfficialGrokVideoService` 适配 PoloAI 官方兼容格式：响应解析同时兼容 xAI 原生 `request_id` 和 PoloAI 返回的 `id` / `task_id` 字段
+*   `provider_registry.py` 同步移除 yunwu_grok_video / yunwu_grok_video_3 注册分支，新增 grok_video_3 注册分支和验证规则
+
+**✨ 新功能：视频后端多模型级联**
+
+*   新增 `MultiModelVideoCascade` 包装类：同一个 baseurl/apikey 下可配置多个模型名，按顺序尝试，失败自动切换下一个（效仿 TrueGrok 的 provider 级级联，但粒度为模型级）
+*   所有视频后端模板（grok_video / grok_video_3 / official_grok_video）新增 `models` 字段（字符串列表），非空时优先启用级联，留空则回退到 `model` 单模型模式
+*   `provider_registry.get_video_backend` 自动检测 `models` 字段并包装底层后端（truegrok 除外，其本身已是 provider 级级联）
+*   典型用法：在一个 grok_video_3 后端配置 `models: ["grok-video-3", "grok-video-3-pro", "grok-video-3-max"]`，自动从便宜的 6s 模型开始尝试，失败切换到更强的模型
+*   完全向后兼容：不填 `models` 字段时行为不变
+
+**🔧 配置提示更新**
+
+*   `truegrok` 模板 hint 更新：移除已删除的「真Grok→假Grok」示例，改为通用描述并提示可配合多模型级联使用
+*   `official_grok_video` 模板 hint 更新：移除云雾引用，补充 PoloAI 官方兼容地址示例
+
+---
+
 ### v1.7.2
 
 **✨ 提示词构建系统提示词人格级暴露**

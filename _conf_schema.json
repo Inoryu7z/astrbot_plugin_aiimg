@@ -1411,6 +1411,12 @@
             "description": "模型 ID",
             "default": "doubao-seedance-1-5-pro-251215"
           },
+          "models": {
+            "type": "list",
+            "description": "模型级联列表（可选，留空则用上方 model 单模型）",
+            "hint": "填入多个模型名按顺序尝试，失败自动切换下一个。例：[\"doubao-seedance-1-5-pro-251215\", \"doubao-seedance-1-5-lite-250428\"]",
+            "default": []
+          },
           "timeout_seconds": {
             "type": "int",
             "description": "任务超时(秒)",
@@ -1500,15 +1506,15 @@
           }
         }
       },
-      "yunwu_grok_video": {
-        "name": "真 Grok（视频）",
-        "description": "基于 Yunwu API 的真 Grok 视频生成（Image-to-Video / Text-to-Video）。",
-        "hint": "仅对 features.video.chain 生效。需要 Yunwu API Key。",
+      "grok_video_3": {
+        "name": "Grok Video 3（multipart）",
+        "description": "Grok Video 3 视频生成（multipart/form-data 协议），适用于 PoloAI、s.apifox 等兼容接口。",
+        "hint": "仅对 features.video.chain 生效。支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)。",
         "items": {
           "id": {
             "type": "string",
             "description": "服务商 ID（唯一）",
-            "default": "yunwu_grok_video"
+            "default": "grok_video_3"
           },
           "label": {
             "type": "string",
@@ -1518,8 +1524,8 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "默认：https://yunwu.ai",
-            "default": "https://yunwu.ai"
+            "hint": "PoloAI：https://poloai.top；其他中转站填对应地址",
+            "default": "https://poloai.top"
           },
           "api_key": {
             "type": "string",
@@ -1530,95 +1536,14 @@
           "model": {
             "type": "string",
             "description": "模型名称",
-            "default": "grok-videos"
-          },
-          "timeout_seconds": {
-            "type": "int",
-            "description": "任务超时(秒)",
-            "slider": {
-              "min": 60,
-              "max": 3600,
-              "step": 30
-            },
-            "default": 300
-          },
-          "polling_interval": {
-            "type": "int",
-            "description": "轮询间隔(秒)",
-            "slider": {
-              "min": 2,
-              "max": 30,
-              "step": 2
-            },
-            "default": 10
-          },
-          "retry_delay": {
-            "type": "int",
-            "description": "重试间隔(秒)",
-            "slider": {
-              "min": 0,
-              "max": 60,
-              "step": 1
-            },
-            "default": 2
-          },
-          "size": {
-            "type": "string",
-            "description": "视频宽高比",
-            "options": [
-              "16:9",
-              "9:16",
-              "1:1",
-              "4:3",
-              "3:4",
-              "21:9"
-            ],
-            "default": "16:9"
-          },
-          "duration": {
-            "type": "int",
-            "description": "视频时长(秒)",
-            "hint": "Grok 视频支持 2~12 秒。",
-            "slider": {
-              "min": 2,
-              "max": 12,
-              "step": 1
-            },
-            "default": 6
-          }
-        }
-      },
-      "yunwu_grok_video_3": {
-        "name": "假 Grok（视频）",
-        "description": "基于 Yunwu API 的 Grok Video 3 视频生成（Image-to-Video / Text-to-Video）。",
-        "hint": "仅对 features.video.chain 生效。需要 Yunwu API Key。使用 grok-video-3 模型。",
-        "items": {
-          "id": {
-            "type": "string",
-            "description": "服务商 ID（唯一）",
-            "default": "yunwu_grok_video_3"
-          },
-          "label": {
-            "type": "string",
-            "description": "显示名称（可选）",
-            "default": ""
-          },
-          "server_url": {
-            "type": "string",
-            "description": "API 服务地址",
-            "hint": "默认：https://yunwu.ai",
-            "default": "https://yunwu.ai"
-          },
-          "api_key": {
-            "type": "string",
-            "description": "API Key",
-            "default": "",
-            "obvious_hint": true
-          },
-          "model": {
-            "type": "string",
-            "description": "模型名称",
+            "hint": "grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)",
             "default": "grok-video-3"
+          },
+          "models": {
+            "type": "list",
+            "description": "模型级联列表（可选，留空则用上方 model 单模型）",
+            "hint": "填入多个模型名按顺序尝试，失败自动切换下一个。例：[\"grok-video-3\", \"grok-video-3-pro\", \"grok-video-3-max\"]",
+            "default": []
           },
           "timeout_seconds": {
             "type": "int",
@@ -1642,10 +1567,10 @@
           },
           "retry_delay": {
             "type": "int",
-            "description": "重试间隔(秒)",
+            "description": "创建任务失败重试次数",
             "slider": {
               "min": 0,
-              "max": 60,
+              "max": 5,
               "step": 1
             },
             "default": 2
@@ -1654,18 +1579,27 @@
             "type": "string",
             "description": "视频宽高比",
             "options": [
-              "16:9",
-              "9:16",
-              "1:1",
+              "2:3",
               "3:2",
-              "2:3"
+              "1:1"
             ],
-            "default": "16:9"
+            "default": "2:3"
+          },
+          "seconds": {
+            "type": "int",
+            "description": "视频时长(秒)",
+            "hint": "需与模型匹配：grok-video-3=6s, grok-video-3-pro=10s, grok-video-3-max=15s",
+            "slider": {
+              "min": 1,
+              "max": 15,
+              "step": 1
+            },
+            "default": 6
           },
           "size": {
             "type": "string",
-            "description": "视频分辨率",
-            "hint": "暂只支持 720P",
+            "description": "视频画质",
+            "hint": "部分中转站仅支持 720P",
             "options": [
               "720P",
               "1080P"
@@ -1676,8 +1610,8 @@
       },
       "official_grok_video": {
         "name": "官方 Grok（视频）",
-        "description": "兼容 xAI 官方 Grok 视频生成 API 的后端，使用 JSON body 格式。适用于官方 API 及其第三方代理（如云雾已兼容官方格式）。",
-        "hint": "仅对 features.video.chain 生效。server_url 填官方地址 https://api.x.ai 或第三方代理地址（如 https://yunwu.ai）。",
+        "description": "兼容 xAI 官方 Grok 视频生成 API 的后端，使用 JSON body 格式。适用于官方 API 及其第三方代理（如 PoloAI 官方兼容接口）。",
+        "hint": "仅对 features.video.chain 生效。server_url 填官方地址 https://api.x.ai 或第三方代理地址（如 https://poloai.top）。",
         "items": {
           "id": {
             "type": "string",
@@ -1692,7 +1626,7 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "官方：https://api.x.ai；云雾（已兼容官方格式）：https://yunwu.ai；其他第三方代理填对应地址",
+            "hint": "官方：https://api.x.ai；PoloAI 官方兼容：https://poloai.top；其他第三方代理填对应地址",
             "default": "https://api.x.ai"
           },
           "api_key": {
@@ -1706,6 +1640,12 @@
             "description": "模型名称",
             "hint": "可选：grok-imagine-video / grok-imagine-video-1.5-preview",
             "default": "grok-imagine-video"
+          },
+          "models": {
+            "type": "list",
+            "description": "模型级联列表（可选，留空则用上方 model 单模型）",
+            "hint": "填入多个模型名按顺序尝试，失败自动切换下一个。例：[\"grok-imagine-video\", \"grok-imagine-video-1.5-preview\"]",
+            "default": []
           },
           "timeout_seconds": {
             "type": "int",
@@ -1777,7 +1717,7 @@
       "truegrok": {
         "name": "True Grok（级联）",
         "description": "级联视频模板：按顺序尝试多个视频服务商，失败自动切换下一个。",
-        "hint": "典型用法：真Grok(便宜/不稳定) → 假Grok(贵/稳定)，省钱同时保成功。",
+        "hint": "典型用法：便宜的后端 → 贵但稳定的后端，省钱同时保成功。也可配合多模型级联（在后端配置 models 字段）实现更细粒度的 fallback。",
         "items": {
           "id": {
             "type": "string",
@@ -1800,7 +1740,7 @@
           "fallback_chain": {
             "type": "list",
             "description": "级联服务商 ID 列表（最多3个，按顺序尝试）",
-            "hint": "填已配置的视频服务商 ID，如 [\"real_grok\", \"fake_grok\"]",
+            "hint": "填已配置的视频服务商 ID，如 [\"grok_video_3\", \"official_grok_video\"]",
             "default": []
           }
         }
