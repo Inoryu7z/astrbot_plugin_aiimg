@@ -12,7 +12,12 @@ from .gitee_edit import GiteeEditBackend
 from .gitee_sizes import GITEE_SUPPORTED_SIZES, normalize_size_text
 from .grok2api_images_backend import Grok2ApiImagesBackend
 from .grok_images_backend import GrokImagesBackend
-from .grok_video_service import GrokVideoService, RealGrokVideoService, FakeGrokVideoService, OfficialGrokVideoService
+from .grok_video_service import (
+    GrokVideoService,
+    GrokVideo3AsyncService,
+    MultiModelVideoCascade,
+    OfficialGrokVideoService,
+)
 from .jimeng_api_backend import JimengApiBackend
 from .openai_chat_image_backend import OpenAIChatImageBackend
 from .openai_compat_backend import OpenAICompatBackend
@@ -117,6 +122,8 @@ class ProviderRegistry:
             return "vertex_ai_anonymous"
         if pid in {"grok_video"}:
             return "grok_video"
+        if pid in {"grok_video_3"}:
+            return "grok_video_3"
         if pid in {"flow2api_video"}:
             return "flow2api_video"
         if isinstance(item.get("fallback_chain"), list):
@@ -124,7 +131,7 @@ class ProviderRegistry:
         return ""
 
     _VIDEO_TEMPLATE_KEYS = frozenset({
-        "grok_video", "yunwu_grok_video", "yunwu_grok_video_3",
+        "grok_video", "grok_video_3",
         "official_grok_video", "grok2api_video", "flow2api_video", "truegrok",
     })
 
@@ -221,6 +228,11 @@ class ProviderRegistry:
                 if not str(item.get("apikey") or "").strip():
                     errors.append(f"provider '{provider_id}' missing apikey")
             if template_key in {"grok_video"}:
+                if not str(item.get("server_url") or "").strip():
+                    errors.append(f"provider '{provider_id}' missing server_url")
+                if not str(item.get("api_key") or "").strip():
+                    errors.append(f"provider '{provider_id}' missing api_key")
+            if template_key in {"grok_video_3"}:
                 if not str(item.get("server_url") or "").strip():
                     errors.append(f"provider '{provider_id}' missing server_url")
                 if not str(item.get("api_key") or "").strip():
@@ -549,10 +561,8 @@ class ProviderRegistry:
         template_key = str(p.get("__template_key") or "").strip()
         if template_key == "grok_video":
             backend: object = GrokVideoService(settings=p)
-        elif template_key == "yunwu_grok_video":
-            backend: object = RealGrokVideoService(settings=p)
-        elif template_key == "yunwu_grok_video_3":
-            backend: object = FakeGrokVideoService(settings=p)
+        elif template_key == "grok_video_3":
+            backend: object = GrokVideo3AsyncService(settings=p)
         elif template_key == "official_grok_video":
             backend: object = OfficialGrokVideoService(settings=p)
         elif template_key == "grok2api_video":
@@ -574,6 +584,28 @@ class ProviderRegistry:
             backend = TrueGrokVideoService(registry=self, provider=p)
         else:
             raise RuntimeError(f"Provider '{pid}' is not a video provider")
+
+        # 多模型级联：models 字段非空时包装为 MultiModelVideoCascade
+        # truegrok 本身是 provider 级级联，不重复包装
+        if template_key != "truegrok":
+            raw_models = p.get("models")
+            if isinstance(raw_models, list):
+                models_list = [str(m or "").strip() for m in raw_models if str(m or "").strip()]
+                if models_list:
+                    try:
+                        backend = MultiModelVideoCascade(backend, models_list)
+                        logger.info(
+                            "[ProviderRegistry] provider '%s' 启用多模型级联: %s",
+                            pid,
+                            models_list,
+                        )
+                    except ValueError as e:
+                        logger.warning(
+                            "[ProviderRegistry] provider '%s' 多模型级联初始化失败: %s",
+                            pid,
+                            e,
+                        )
+
         self._video_backends[pid] = backend
         return backend
 
