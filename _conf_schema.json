@@ -1508,8 +1508,8 @@
       },
       "grok_video_3": {
         "name": "Grok Video 3（multipart）",
-        "description": "Grok Video 3 视频生成（multipart/form-data 协议），适用于 PoloAI、s.apifox 等兼容接口。",
-        "hint": "仅对 features.video.chain 生效。支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)。",
+        "description": "Grok Video 3 视频生成（multipart/form-data 协议，POST /v1/videos）。对应文档：s.apifox 410343373、poloapi 422941674e0。",
+        "hint": "仅对 features.video.chain 生效。支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)。注意：此为 multipart 协议，与官方 /v1/videos/generations（JSON）不兼容，勿混淆。",
         "items": {
           "id": {
             "type": "string",
@@ -1524,7 +1524,7 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "PoloAI：https://poloai.top；其他中转站填对应地址",
+            "hint": "s.apifox 中转站填其 baseurl；PoloAI：https://poloai.top",
             "default": "https://poloai.top"
           },
           "api_key": {
@@ -1578,12 +1578,8 @@
           "aspect_ratio": {
             "type": "string",
             "description": "视频宽高比",
-            "options": [
-              "2:3",
-              "3:2",
-              "1:1"
-            ],
-            "default": "2:3"
+            "hint": "自由填写，如 16:9 / 9:16 / 1:1 / 2:3 / 3:2。各中转站支持的值不同，留空走 API 默认",
+            "default": "16:9"
           },
           "seconds": {
             "type": "int",
@@ -1599,19 +1595,15 @@
           "size": {
             "type": "string",
             "description": "视频画质",
-            "hint": "部分中转站仅支持 720P",
-            "options": [
-              "720P",
-              "1080P"
-            ],
+            "hint": "大写 720P/1080P 或小写 720p/1080p，视中转站而定；部分仅支持 720p",
             "default": "720P"
           }
         }
       },
       "official_grok_video": {
         "name": "官方 Grok（视频）",
-        "description": "兼容 xAI 官方 Grok 视频生成 API 的后端，使用 JSON body 格式。适用于官方 API 及其第三方代理（如 PoloAI 官方兼容接口）。",
-        "hint": "仅对 features.video.chain 生效。server_url 填官方地址 https://api.x.ai 或第三方代理地址（如 https://poloai.top）。",
+        "description": "xAI 官方 Grok 视频生成后端，JSON body 协议，POST /v1/videos/generations。仅适用于完全兼容 xAI 官方协议的端点。",
+        "hint": "仅对 features.video.chain 生效。server_url 填 https://api.x.ai 或完全兼容官方 /v1/videos/generations 协议的代理。不兼容 multipart 协议（s.apifox 410343373 / poloapi 422941674e0 请用 grok_video_3 后端）。",
         "items": {
           "id": {
             "type": "string",
@@ -1626,7 +1618,7 @@
           "server_url": {
             "type": "string",
             "description": "API 服务地址",
-            "hint": "官方：https://api.x.ai；PoloAI 官方兼容：https://poloai.top；其他第三方代理填对应地址",
+            "hint": "官方：https://api.x.ai；或完全兼容官方协议的代理地址",
             "default": "https://api.x.ai"
           },
           "api_key": {
