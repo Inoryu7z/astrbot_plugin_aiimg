@@ -720,7 +720,7 @@ class GrokVideo3AsyncService:
             self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
         )
 
-        self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "2:3"))
+        self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "16:9"))
         self.default_seconds: int = _clamp_int(
             self.settings.get("seconds", 6), default=6, min_value=1, max_value=15
         )
