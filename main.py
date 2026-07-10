@@ -1741,7 +1741,7 @@ class GiteeAIImagePlugin(Star):
         仅当 features.selfie.wardrobe_ref_enabled 开启时可用。
 
         Args:
-            query(string): 自然语言描述，如"穿着洛丽塔连衣裙在户外拍照""泳装海边自拍"，用于从衣橱中检索最匹配的参考图
+            query(string): 自然语言检索描述，用于从衣橱中检索最匹配的参考图。当存在明确视觉焦点时，可在开头加"重点是X。"前缀强调检索优先级（X须是正文已有的核心元素），无单一焦点时直接写完整描述
         """
         selfie_conf = self._get_feature("selfie")
         if not selfie_conf.get("wardrobe_ref_enabled", False):
