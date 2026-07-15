@@ -1568,12 +1568,13 @@
           "retry_delay": {
             "type": "int",
             "description": "创建任务失败重试次数",
+            "hint": "多模型级联时建议设 0，避免单个模型失败时重复请求浪费额度",
             "slider": {
               "min": 0,
               "max": 5,
               "step": 1
             },
-            "default": 2
+            "default": 0
           },
           "aspect_ratio": {
             "type": "string",

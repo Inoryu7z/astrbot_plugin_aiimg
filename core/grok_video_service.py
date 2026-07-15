@@ -549,7 +549,7 @@ class DoubaoSeedanceService:
             self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
         )
         self.retry_delay: int = _clamp_int(
-            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+            self.settings.get("retry_delay", 0), default=0, min_value=0, max_value=60
         )
 
         self.default_ratio: str = str(self.settings.get("ratio", "9:16"))
@@ -717,7 +717,7 @@ class GrokVideo3AsyncService:
             self.settings.get("polling_interval", 10), default=10, min_value=2, max_value=30
         )
         self.retry_delay: int = _clamp_int(
-            self.settings.get("retry_delay", 2), default=2, min_value=0, max_value=60
+            self.settings.get("retry_delay", 0), default=0, min_value=0, max_value=60
         )
 
         self.default_aspect_ratio: str = str(self.settings.get("aspect_ratio", "16:9"))
@@ -853,17 +853,32 @@ class GrokVideo3AsyncService:
 
             status = q_data.get("status")
 
-            if status in ("completed", "succeeded"):
+            # 兼容多种中转站的状态值：小写 completed/succeeded，大写 SUCCESS
+            status_lower = str(status or "").lower()
+            if status_lower in ("completed", "succeeded", "success"):
+                # video_url 可能在顶层或 data 嵌套对象里
                 video_url = q_data.get("video_url")
+                if not video_url:
+                    data_obj = q_data.get("data")
+                    if isinstance(data_obj, dict):
+                        video_url = data_obj.get("video_url")
+                if not video_url:
+                    # 深度搜索兜底
+                    video_url = _deep_find_video_url(q_data)
                 if video_url:
                     logger.info(f"[GrokVideo3] 任务完成: {task_id}")
-                    return video_url
+                    return str(video_url)
                 raise RuntimeError(f"任务完成但无 video_url: {str(q_data)[:200]}")
-            elif status in ("failed", "cancelled"):
+            elif status_lower in ("failed", "cancelled", "error"):
                 error_obj = q_data.get("error", {})
                 error_msg = error_obj.get("message", str(q_data)) if isinstance(error_obj, dict) else str(q_data)
+                # 部分中转站把失败信息放在 fail_reason 字段
+                if not error_obj:
+                    fail_reason = q_data.get("fail_reason") or q_data.get("message")
+                    if fail_reason:
+                        error_msg = str(fail_reason)
                 raise RuntimeError(f"任务失败 ({status}): {error_msg}")
-            else:  # queued / processing
+            else:  # queued / processing / SUCCESS(大写未完成) 等
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
                     logger.info(
                         f"[GrokVideo3] 轮询中: task={task_id}, status={status}, "
