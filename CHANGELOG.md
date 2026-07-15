@@ -2,9 +2,11 @@
 
 **🐛 修复：引用/附带图片生成视频全部失败**
 
-*   修复 `Image.convert_to_base64()` 在 seg.url 指向已被清理的 AstrBot 临时缓存路径（如 `/AstrBot/data/temp/media_image_xxx.jpg`）时抛 FileNotFoundError 导致整个图生视频流程失败的恶性 bug
-*   该 bug 影响所有视频后端（豆包、Grok multipart、官方 Grok），导致引用图片或附带图片调用 `/视频` 全部走文生视频回退路径
+*   根因：AstrBot PreProcessStage 会把 Image 的 url/file/path 三个字段全部覆盖为本地临时缓存路径（`/AstrBot/data/temp/media_image_xxx.jpg`），并在事件生命周期结束时清理。`_async_generate_video` 通过 `asyncio.create_task` 异步调度，事件结束后临时文件被清理，异步任务再读图片就会 FileNotFoundError
+*   修复：新增 `_prefetch_image_from_event` 方法，在 `create_task` 之前（事件同步阶段，临时文件还存在）预提取 image_bytes，传给异步任务
+*   三个视频调用点（/视频 命令、regex fallback、LLM tool）均在 create_task 之前调用预提取
 *   新增 `_extract_image_bytes_from_seg` fallback：convert_to_base64 失败时，按 url → file → path 顺序尝试 http(s) 下载 / base64 解码 / file:// 解析 / 裸本地路径读取
+*   该 Bug 影响所有视频后端（豆包、Grok multipart、官方 Grok），导致引用图片或附带图片调用 `/视频` 全部走文生视频回退路径
 
 **🔧 后端重命名与配置澄清**
 
