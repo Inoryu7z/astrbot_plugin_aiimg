@@ -1,3 +1,21 @@
+### v1.8.1
+
+**🐛 修复：引用/附带图片生成视频全部失败**
+
+*   修复 `Image.convert_to_base64()` 在 seg.url 指向已被清理的 AstrBot 临时缓存路径（如 `/AstrBot/data/temp/media_image_xxx.jpg`）时抛 FileNotFoundError 导致整个图生视频流程失败的恶性 bug
+*   该 bug 影响所有视频后端（豆包、Grok multipart、官方 Grok），导致引用图片或附带图片调用 `/视频` 全部走文生视频回退路径
+*   新增 `_extract_image_bytes_from_seg` fallback：convert_to_base64 失败时，按 url → file → path 顺序尝试 http(s) 下载 / base64 解码 / file:// 解析 / 裸本地路径读取
+
+**🔧 后端重命名与配置澄清**
+
+*   `grok_video_3` 模板重命名为 `grok_video_multipart`，名称更直白地体现协议特征（避免与官方 Grok 混淆）。保留 `grok_video_3` 作为别名兼容旧配置
+*   `grok_video_multipart` description/hint 明确对应文档：s.apifox 410343373、poloapi 422941674e0，并标注"multipart 协议，与官方 /v1/videos/generations 不兼容"
+*   `official_grok_video` description/hint 明确"仅适用于完全兼容 xAI 官方协议的端点，不兼容 multipart 协议的 s.apifox/poloapi"
+*   `grok_video_multipart` 的 `aspect_ratio` 从 `options` 下拉框（仅 2:3/3:2/1:1）改为自由字符串输入，默认 16:9
+*   `grok_video_multipart` 的 `size` hint 补充大小写差异说明
+
+---
+
 ### v1.8.0
 
 **🚀 视频后端重构：移除云雾旧格式 + 新增 Grok Video 3 multipart 后端**

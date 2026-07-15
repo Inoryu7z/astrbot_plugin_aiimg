@@ -1506,15 +1506,15 @@
           }
         }
       },
-      "grok_video_3": {
-        "name": "Grok Video 3（multipart）",
-        "description": "Grok Video 3 视频生成（multipart/form-data 协议，POST /v1/videos）。对应文档：s.apifox 410343373、poloapi 422941674e0。",
+      "grok_video_multipart": {
+        "name": "Grok Video（multipart 中转站）",
+        "description": "Grok 视频生成 - multipart/form-data 协议，POST /v1/videos。对应文档：s.apifox 410343373、poloapi 422941674e0。适用于 s.apifox、PoloAI 等中转站。",
         "hint": "仅对 features.video.chain 生效。支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)。注意：此为 multipart 协议，与官方 /v1/videos/generations（JSON）不兼容，勿混淆。",
         "items": {
           "id": {
             "type": "string",
             "description": "服务商 ID（唯一）",
-            "default": "grok_video_3"
+            "default": "grok_video_multipart"
           },
           "label": {
             "type": "string",
@@ -1603,7 +1603,7 @@
       "official_grok_video": {
         "name": "官方 Grok（视频）",
         "description": "xAI 官方 Grok 视频生成后端，JSON body 协议，POST /v1/videos/generations。仅适用于完全兼容 xAI 官方协议的端点。",
-        "hint": "仅对 features.video.chain 生效。server_url 填 https://api.x.ai 或完全兼容官方 /v1/videos/generations 协议的代理。不兼容 multipart 协议（s.apifox 410343373 / poloapi 422941674e0 请用 grok_video_3 后端）。",
+        "hint": "仅对 features.video.chain 生效。server_url 填 https://api.x.ai 或完全兼容官方 /v1/videos/generations 协议的代理。不兼容 multipart 协议（s.apifox 410343373 / poloapi 422941674e0 请用 grok_video_multipart 后端）。",
         "items": {
           "id": {
             "type": "string",
@@ -1732,7 +1732,7 @@
           "fallback_chain": {
             "type": "list",
             "description": "级联服务商 ID 列表（最多3个，按顺序尝试）",
-            "hint": "填已配置的视频服务商 ID，如 [\"grok_video_3\", \"official_grok_video\"]",
+            "hint": "填已配置的视频服务商 ID，如 [\"grok_video_multipart\", \"official_grok_video\"]",
             "default": []
           }
         }

@@ -122,8 +122,8 @@ class ProviderRegistry:
             return "vertex_ai_anonymous"
         if pid in {"grok_video"}:
             return "grok_video"
-        if pid in {"grok_video_3"}:
-            return "grok_video_3"
+        if pid in {"grok_video_3", "grok_video_multipart"}:
+            return "grok_video_multipart"
         if pid in {"flow2api_video"}:
             return "flow2api_video"
         if isinstance(item.get("fallback_chain"), list):
@@ -131,7 +131,7 @@ class ProviderRegistry:
         return ""
 
     _VIDEO_TEMPLATE_KEYS = frozenset({
-        "grok_video", "grok_video_3",
+        "grok_video", "grok_video_3", "grok_video_multipart",
         "official_grok_video", "grok2api_video", "flow2api_video", "truegrok",
     })
 
@@ -232,7 +232,7 @@ class ProviderRegistry:
                     errors.append(f"provider '{provider_id}' missing server_url")
                 if not str(item.get("api_key") or "").strip():
                     errors.append(f"provider '{provider_id}' missing api_key")
-            if template_key in {"grok_video_3"}:
+            if template_key in {"grok_video_3", "grok_video_multipart"}:
                 if not str(item.get("server_url") or "").strip():
                     errors.append(f"provider '{provider_id}' missing server_url")
                 if not str(item.get("api_key") or "").strip():
@@ -561,7 +561,7 @@ class ProviderRegistry:
         template_key = str(p.get("__template_key") or "").strip()
         if template_key == "grok_video":
             backend: object = GrokVideoService(settings=p)
-        elif template_key == "grok_video_3":
+        elif template_key in ("grok_video_3", "grok_video_multipart"):
             backend: object = GrokVideo3AsyncService(settings=p)
         elif template_key == "official_grok_video":
             backend: object = OfficialGrokVideoService(settings=p)

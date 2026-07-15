@@ -2119,6 +2119,56 @@ class GiteeAIImagePlugin(Star):
             return
         await event.send(event.plain_result(video_url))
 
+    async def _extract_image_bytes_from_seg(self, seg) -> tuple[bytes | None, str | None]:
+        """从 Image 段的多字段提取 bytes，作为 convert_to_base64 失败时的 fallback。
+
+        某些场景下 seg.url 指向 AstrBot 临时缓存（/AstrBot/data/temp/media_image_xxx.jpg），
+        但文件已被清理，导致 convert_to_base64 抛 FileNotFoundError。
+        此处遍历 url/file/path 三个字段，按以下顺序尝试：
+        - http(s):// 远程下载
+        - base64:// / data:image/...;base64, 解码
+        - file:// URI 解析本地路径
+        - 裸本地路径直接读取（需文件存在）
+        返回 (bytes, url_for_backend)。url_for_backend 仅在来源是远程 http(s) 时返回。
+        """
+        import os as _os
+        from urllib.parse import unquote, urlsplit
+
+        for attr in ("url", "file", "path"):
+            raw = str(getattr(seg, attr, "") or "").strip()
+            if not raw:
+                continue
+            try:
+                if raw.startswith(("http://", "https://")):
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                        resp = await client.get(raw)
+                        resp.raise_for_status()
+                        return resp.content, raw
+                if raw.startswith("base64://"):
+                    payload = raw[len("base64://"):].strip()
+                    if payload:
+                        return base64.b64decode(payload), None
+                if raw.startswith("data:") and "," in raw:
+                    header, payload = raw.split(",", 1)
+                    if ";base64" in header.lower() and payload.strip():
+                        return base64.b64decode(payload.strip()), None
+                if raw.startswith("file://"):
+                    parsed = urlsplit(raw)
+                    local_path = unquote(parsed.path or "")
+                    # Windows: file:///C:/... -> C:/...
+                    if local_path.startswith("/") and len(local_path) > 3 and local_path[2] == ":":
+                        local_path = local_path[1:]
+                    if local_path and _os.path.exists(local_path):
+                        return await asyncio.to_thread(lambda: open(local_path, "rb").read()), None
+                elif raw and not raw.startswith(("http://", "https://", "base64://", "data:")):
+                    # 裸本地路径，但需排除明显的 URL 误判
+                    if _os.path.exists(raw):
+                        return await asyncio.to_thread(lambda: open(raw, "rb").read()), None
+            except Exception as e:
+                logger.debug(f"[视频] seg.{attr}={raw[:60]}... 提取失败: {e}")
+                continue
+        return None, None
+
     async def _async_generate_video(
             self,
             event: AstrMessageEvent,
@@ -2165,7 +2215,23 @@ class GiteeAIImagePlugin(Star):
                                 image_url = seg_url
                         break
                     except Exception as e:
-                        logger.warning(f"[视频] 图片 {i + 1} 转换失败，跳过: {e}")
+                        # convert_to_base64 在 seg.url 指向已被清理的 AstrBot 临时缓存
+                        # （如 /AstrBot/data/temp/media_image_xxx.jpg）时会抛
+                        # FileNotFoundError。这里 fallback 到 seg.file / seg.path，
+                        # 它们可能是 base64://、data:、file://、http(s):// 或裸路径。
+                        logger.warning(f"[视频] 图片 {i + 1} convert_to_base64 失败，尝试字段 fallback: {e}")
+                        fallback_bytes, fallback_url = await self._extract_image_bytes_from_seg(seg)
+                        if fallback_bytes:
+                            image_bytes = fallback_bytes
+                            if not image_url and fallback_url:
+                                image_url = fallback_url
+                            logger.info(
+                                "[视频] 图片 %s 字段 fallback 成功: size=%s bytes",
+                                i + 1,
+                                len(image_bytes),
+                            )
+                            break
+                        logger.warning(f"[视频] 图片 {i + 1} 所有字段均失败，跳过")
 
                 if image_bytes and (not image_url or not image_url.startswith(("http://", "https://"))):
                     from .core.grok_video_service import _build_data_url
