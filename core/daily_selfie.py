@@ -1371,39 +1371,62 @@ class DailySelfieService:
                 chat_provider_id, system_prompt, user_prompt,
             )
 
-        try:
-            resp = await asyncio.wait_for(
-                self.plugin.context.llm_generate(
-                    chat_provider_id=chat_provider_id,
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                ),
-                timeout=360,
-            )
-            text = (getattr(resp, "completion_text", "") or "").strip()
-            if not text:
-                tool_names = getattr(resp, "tools_call_name", None) or []
-                logger.warning(
-                    "[DailySelfie] LLM第1轮返回空文本 role=%s tool_calls=%s result_chain=%s",
-                    getattr(resp, "role", "?"),
-                    tool_names,
-                    bool(getattr(resp, "result_chain", None)),
+        # 重试一次：超时/异常/返回空/返回条数不足均重试
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=chat_provider_id,
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                    ),
+                    timeout=360,
                 )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    tool_names = getattr(resp, "tools_call_name", None) or []
+                    logger.warning(
+                        "[DailySelfie] LLM第1轮返回空文本(第%d次) role=%s tool_calls=%s result_chain=%s",
+                        attempt + 1, getattr(resp, "role", "?"),
+                        tool_names, bool(getattr(resp, "result_chain", None)),
+                    )
+                    if attempt == 0:
+                        logger.info("[DailySelfie] LLM第1轮返回空，重试一次")
+                        continue
+                    return []
+
+                if self._is_debug():
+                    logger.info(
+                        "[DailySelfie][DEBUG][Round1] === LLM response ===\n%s",
+                        text,
+                    )
+
+                parsed = _parse_llm_lines(text, remaining)
+                if len(parsed) < remaining and attempt == 0:
+                    logger.warning(
+                        "[DailySelfie] LLM第1轮返回 %d 条（期望 %d 条），重试一次",
+                        len(parsed), remaining,
+                    )
+                    continue
+                if len(parsed) < remaining:
+                    logger.warning(
+                        "[DailySelfie] LLM第1轮重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        len(parsed), remaining,
+                    )
+                return parsed
+            except asyncio.TimeoutError:
+                logger.error("[DailySelfie] LLM第1轮调用超时(360s)(第%d次)", attempt + 1)
+                if attempt == 0:
+                    logger.info("[DailySelfie] LLM第1轮超时，重试一次")
+                    continue
                 return []
-
-            if self._is_debug():
-                logger.info(
-                    "[DailySelfie][DEBUG][Round1] === LLM response ===\n%s",
-                    text,
-                )
-
-            return _parse_llm_lines(text, remaining)
-        except asyncio.TimeoutError:
-            logger.error("[DailySelfie] LLM第1轮调用超时(360s)")
-            return []
-        except Exception as e:
-            logger.error("[DailySelfie] LLM第1轮调用失败: %s", e)
-            return []
+            except Exception as e:
+                logger.error("[DailySelfie] LLM第1轮调用失败(第%d次): %s", attempt + 1, e)
+                if attempt == 0:
+                    logger.info("[DailySelfie] LLM第1轮异常，重试一次")
+                    continue
+                return []
+        return []
 
     async def _llm_round2_scene(
         self,
@@ -1421,33 +1444,57 @@ class DailySelfieService:
                 chat_provider_id, system_prompt, user_prompt,
             )
 
-        try:
-            resp = await asyncio.wait_for(
-                self.plugin.context.llm_generate(
-                    chat_provider_id=chat_provider_id,
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                ),
-                timeout=360,
-            )
-            text = (getattr(resp, "completion_text", "") or "").strip()
-            if not text:
-                logger.warning("[DailySelfie] LLM第2轮(场景)返回空文本")
-                return []
-
-            if self._is_debug():
-                logger.info(
-                    "[DailySelfie][DEBUG][Round2-Scene] === LLM response ===\n%s",
-                    text,
+        # 重试一次：超时/异常/返回空/返回条数不足均重试
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=chat_provider_id,
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                    ),
+                    timeout=360,
                 )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    logger.warning("[DailySelfie] LLM第2轮(场景)返回空文本(第%d次)", attempt + 1)
+                    if attempt == 0:
+                        logger.info("[DailySelfie] LLM第2轮(场景)返回空，重试一次")
+                        continue
+                    return []
 
-            return _parse_llm_lines(text, count)
-        except asyncio.TimeoutError:
-            logger.error("[DailySelfie] LLM第2轮(场景)调用超时(360s)")
-            return []
-        except Exception as e:
-            logger.error("[DailySelfie] LLM第2轮(场景)调用失败: %s", e)
-            return []
+                if self._is_debug():
+                    logger.info(
+                        "[DailySelfie][DEBUG][Round2-Scene] === LLM response ===\n%s",
+                        text,
+                    )
+
+                parsed = _parse_llm_lines(text, count)
+                if len(parsed) < count and attempt == 0:
+                    logger.warning(
+                        "[DailySelfie] LLM第2轮(场景)返回 %d 条（期望 %d 条），重试一次",
+                        len(parsed), count,
+                    )
+                    continue
+                if len(parsed) < count:
+                    logger.warning(
+                        "[DailySelfie] LLM第2轮(场景)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        len(parsed), count,
+                    )
+                return parsed
+            except asyncio.TimeoutError:
+                logger.error("[DailySelfie] LLM第2轮(场景)调用超时(360s)(第%d次)", attempt + 1)
+                if attempt == 0:
+                    logger.info("[DailySelfie] LLM第2轮(场景)超时，重试一次")
+                    continue
+                return []
+            except Exception as e:
+                logger.error("[DailySelfie] LLM第2轮(场景)调用失败(第%d次): %s", attempt + 1, e)
+                if attempt == 0:
+                    logger.info("[DailySelfie] LLM第2轮(场景)异常，重试一次")
+                    continue
+                return []
+        return []
 
     async def _llm_round3_design(
         self,
@@ -1543,25 +1590,52 @@ class DailySelfieService:
                 chat_provider_id, effective_prompt, user_prompt,
             )
 
-        try:
-            resp = await asyncio.wait_for(
-                self.plugin.context.llm_generate(
-                    chat_provider_id=chat_provider_id,
-                    prompt=user_prompt,
-                    system_prompt=effective_prompt,
-                ),
-                timeout=360,
-            )
-            text = (getattr(resp, "completion_text", "") or "").strip()
-            if text:
-                return _parse_llm_lines(text, len(designs))
-            return []
-        except asyncio.TimeoutError:
-            logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(360s)")
-            return []
-        except Exception as e:
-            logger.error("[DailySelfie] 第4轮(提示词构建)调用失败: %s", e)
-            return []
+        # 重试一次：超时/异常/返回空/返回条数不足均重试
+        expected = len(designs)
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=chat_provider_id,
+                        prompt=user_prompt,
+                        system_prompt=effective_prompt,
+                    ),
+                    timeout=360,
+                )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    logger.warning("[DailySelfie] 第4轮(提示词构建)返回空文本(第%d次)", attempt + 1)
+                    if attempt == 0:
+                        logger.info("[DailySelfie] 第4轮(提示词构建)返回空，重试一次")
+                        continue
+                    return []
+
+                parsed = _parse_llm_lines(text, expected)
+                if len(parsed) < expected and attempt == 0:
+                    logger.warning(
+                        "[DailySelfie] 第4轮(提示词构建)返回 %d 条（期望 %d 条），重试一次",
+                        len(parsed), expected,
+                    )
+                    continue
+                if len(parsed) < expected:
+                    logger.warning(
+                        "[DailySelfie] 第4轮(提示词构建)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        len(parsed), expected,
+                    )
+                return parsed
+            except asyncio.TimeoutError:
+                logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(360s)(第%d次)", attempt + 1)
+                if attempt == 0:
+                    logger.info("[DailySelfie] 第4轮(提示词构建)超时，重试一次")
+                    continue
+                return []
+            except Exception as e:
+                logger.error("[DailySelfie] 第4轮(提示词构建)调用失败(第%d次): %s", attempt + 1, e)
+                if attempt == 0:
+                    logger.info("[DailySelfie] 第4轮(提示词构建)异常，重试一次")
+                    continue
+                return []
+        return []
 
     async def _search_reference_images(
         self,
