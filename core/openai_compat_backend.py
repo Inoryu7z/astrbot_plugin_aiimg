@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import inspect
 import io
 import re
@@ -247,6 +248,10 @@ class OpenAICompatBackend:
         if user_agent:
             self._default_headers["User-Agent"] = user_agent
 
+        # s.apifox 中转站（magic666.top）使用 JSON 数组格式的 image 字段，与标准 OpenAI multipart 协议不兼容
+        # 检测到该 base_url 时走专用 httpx JSON 路径
+        self._is_magic666 = "magic666.top" in (self.base_url or "").lower()
+
     @staticmethod
     def _supports_http_client_param() -> bool:
         try:
@@ -480,6 +485,125 @@ class OpenAICompatBackend:
             return await self.imgr.save_base64_image(str(b64_json))
         raise RuntimeError("返回数据不包含图片")
 
+    async def _magic666_request(
+        self,
+        payload: dict,
+        *,
+        use_edit_endpoint: bool = False,
+    ) -> Path:
+        """s.apifox 中转站专用：JSON body + image 字段为 base64 数组。
+
+        文生图走 /v1/images/generations，改图走 /v1/images/edits（均为 JSON，非 multipart）。
+        响应格式与标准 OpenAI Images API 一致：{data: [{url|b64_json}]}。
+        """
+        import httpx
+
+        endpoint = "/v1/images/edits" if use_edit_endpoint else "/v1/images/generations"
+        # base_url 已被 normalize_openai_compat_base_url 规范化为带 /v1 的形式，切掉 /v1 再拼端点
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        url = f"{base}{endpoint}"
+
+        key = self._next_key()
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self._default_headers:
+            headers.update(self._default_headers)
+
+        t0 = time.time()
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                proxy=self.proxy_url or None,
+            ) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+        except Exception as e:
+            logger.error(
+                f"[OpenAICompat][magic666] HTTP 请求失败 url={url} 耗时: {time.time() - t0:.2f}s: {e}"
+            )
+            raise
+
+        logger.info(f"[OpenAICompat][magic666] HTTP 响应耗时: {time.time() - t0:.2f}s status={resp.status_code}")
+
+        if resp.status_code >= 400:
+            body_text = resp.text[:500] if resp.text else ""
+            logger.error(
+                "[OpenAICompat][magic666] 接口返回错误 status=%s url=%s body=%s",
+                resp.status_code, url, body_text,
+            )
+            raise RuntimeError(
+                f"magic666 接口错误 status={resp.status_code}: {body_text}"
+            )
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            logger.error(
+                "[OpenAICompat][magic666] 响应 JSON 解析失败: %s body=%s",
+                e, resp.text[:500],
+            )
+            raise RuntimeError(f"magic666 响应解析失败: {e}")
+
+        # 响应格式兼容标准 OpenAI Images API：{data: [{url|b64_json}]}
+        items = data.get("data") if isinstance(data, dict) else None
+        if not items or not isinstance(items, list):
+            raise RuntimeError(f"magic666 返回数据不含 data 数组: {str(data)[:300]}")
+
+        first = items[0] if items else {}
+        if not isinstance(first, dict):
+            raise RuntimeError(f"magic666 data[0] 非对象: {str(first)[:200]}")
+
+        img_url = first.get("url")
+        b64_json = first.get("b64_json")
+
+        if img_url:
+            return await self.imgr.download_image(str(img_url))
+        if b64_json:
+            return await self.imgr.save_base64_image(str(b64_json))
+        raise RuntimeError(f"magic666 返回数据不含 url/b64_json: {str(first)[:300]}")
+
+    async def _magic666_generate(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        size: str,
+    ) -> Path:
+        """magic666 文生图：POST /v1/images/generations（纯 JSON，不带 image 字段）。"""
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+        }
+        return await self._magic666_request(payload, use_edit_endpoint=False)
+
+    async def _magic666_edit(
+        self,
+        prompt: str,
+        images: list[bytes],
+        *,
+        model: str,
+        size: str,
+    ) -> Path:
+        """magic666 图生图：POST /v1/images/edits（JSON，image 字段为 base64 数组）。"""
+        image_b64_list: list[str] = []
+        for img in images:
+            image_b64_list.append(base64.b64encode(img).decode("utf-8"))
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+            "image": image_b64_list,
+        }
+        return await self._magic666_request(payload, use_edit_endpoint=True)
+
     async def generate(
         self,
         prompt: str,
@@ -489,9 +613,6 @@ class OpenAICompatBackend:
         resolution: str | None = None,
         extra_body: dict | None = None,
     ) -> Path:
-        key = self._next_key()
-        client = self._get_client(key)
-
         final_model = str(model or self.default_model or "").strip()
         if not final_model:
             raise RuntimeError("未配置 model")
@@ -503,6 +624,19 @@ class OpenAICompatBackend:
                 raw_size,
                 final_size,
             )
+
+        # s.apifox 中转站（magic666.top）走专用 JSON 路径，不使用 OpenAI SDK
+        if self._is_magic666:
+            logger.info(
+                "[OpenAICompat][magic666][generate] model=%s size=%s prompt_len=%d",
+                final_model, final_size, len(prompt),
+            )
+            return await self._magic666_generate(
+                prompt, model=final_model, size=final_size,
+            )
+
+        key = self._next_key()
+        client = self._get_client(key)
 
         kwargs: dict = {
             "model": final_model,
@@ -594,6 +728,19 @@ class OpenAICompatBackend:
                 raw_size,
                 final_size,
             )
+
+        # s.apifox 中转站（magic666.top）走专用 JSON 路径：image 字段为 base64 数组
+        if self._is_magic666:
+            logger.info(
+                "[OpenAICompat][magic666][edit] model=%s size=%s images=%d prompt_len=%d",
+                final_model, final_size, len(images), len(prompt),
+            )
+            return await self._magic666_edit(
+                prompt, images, model=final_model, size=final_size,
+            )
+
+        key = self._next_key()
+        client = self._get_client(key)
 
         if len(images) > 1:
             uploads = []
