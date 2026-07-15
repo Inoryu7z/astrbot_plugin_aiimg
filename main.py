@@ -1196,6 +1196,40 @@ class GiteeAIImagePlugin(Star):
 
     # ==================== 视频生成 ====================
 
+    async def _prefetch_image_from_event(self, event: AstrMessageEvent) -> tuple[bytes | None, str]:
+        """在事件同步阶段（create_task 之前）预提取图片 bytes。
+
+        AstrBot PreProcessStage 会把 Image 的 url/file/path 三个字段全部覆盖为
+        本地临时缓存路径（/AstrBot/data/temp/media_image_xxx.jpg），并在事件生命
+        周期结束时清理。如果 _async_generate_video 通过 asyncio.create_task 异步
+        调度，事件结束后临时文件被清理，异步任务再读图片就会 FileNotFoundError。
+
+        此方法在事件还活着的时候（同步处理阶段）把 bytes 提取出来，传给异步任务。
+        返回 (image_bytes, image_url)。image_url 仅在远程 http(s) 时有值。
+        """
+        try:
+            image_segs = await get_images_from_event(
+                event,
+                include_avatar=True,
+                include_sender_avatar_fallback=False,
+            )
+            for seg in image_segs:
+                try:
+                    b64 = await seg.convert_to_base64()
+                    image_bytes = base64.b64decode(b64)
+                    if image_bytes:
+                        seg_url = str(getattr(seg, "url", "") or "").strip()
+                        return image_bytes, (seg_url if seg_url else "")
+                except Exception as e:
+                    logger.warning(f"[视频预提取] convert_to_base64 失败: {e}")
+                    # fallback 到字段遍历
+                    fallback_bytes, fallback_url = await self._extract_image_bytes_from_seg(seg)
+                    if fallback_bytes:
+                        return fallback_bytes, (fallback_url or "")
+        except Exception as e:
+            logger.warning(f"[视频预提取] 提取图片失败: {e}")
+        return None, ""
+
     @filter.command("视频")
     async def generate_video_command(self, event: AstrMessageEvent):
         """生成视频
@@ -1243,9 +1277,11 @@ class GiteeAIImagePlugin(Star):
             return
 
         try:
+            prefetched_bytes, _ = await self._prefetch_image_from_event(event)
             task = asyncio.create_task(
                 self._async_generate_video(
-                    event, prompt, user_id, provider_id=provider_override
+                    event, prompt, user_id, provider_id=provider_override,
+                    prefetched_image_bytes=prefetched_bytes,
                 )
             )
         except Exception:
@@ -1312,9 +1348,11 @@ class GiteeAIImagePlugin(Star):
             return
 
         try:
+            prefetched_bytes, _ = await self._prefetch_image_from_event(event)
             task = asyncio.create_task(
                 self._async_generate_video(
-                    event, prompt, user_id, provider_id=provider_override
+                    event, prompt, user_id, provider_id=provider_override,
+                    prefetched_image_bytes=prefetched_bytes,
                 )
             )
         except Exception:
@@ -1712,6 +1750,10 @@ class GiteeAIImagePlugin(Star):
 
         try:
             await mark_processing(event)
+            # 预提取图片：LLM tool 路径可能已有 image_url，但如果没有则从 event 提取
+            prefetched_bytes = None
+            if not image_url:
+                prefetched_bytes, _ = await self._prefetch_image_from_event(event)
             task = asyncio.create_task(
                 self._async_generate_video(
                     event,
@@ -1720,6 +1762,7 @@ class GiteeAIImagePlugin(Star):
                     provider_id=provider_override,
                     llm_tool_failure=True,
                     image_url=image_url,
+                    prefetched_image_bytes=prefetched_bytes,
                 )
             )
         except Exception:
@@ -2165,8 +2208,18 @@ class GiteeAIImagePlugin(Star):
                     if _os.path.exists(raw):
                         return await asyncio.to_thread(lambda: open(raw, "rb").read()), None
             except Exception as e:
-                logger.debug(f"[视频] seg.{attr}={raw[:60]}... 提取失败: {e}")
+                logger.warning(f"[视频] seg.{attr}={raw[:80]}... 提取失败: {e}")
                 continue
+        # 所有字段均失败的诊断日志
+        try:
+            diag = {
+                "url": str(getattr(seg, "url", "") or "")[:120],
+                "file": str(getattr(seg, "file", "") or "")[:120],
+                "path": str(getattr(seg, "path", "") or "")[:120],
+            }
+            logger.warning(f"[视频] seg 所有字段均失败，seg 诊断: {diag}")
+        except Exception:
+            pass
         return None, None
 
     async def _async_generate_video(
@@ -2178,9 +2231,12 @@ class GiteeAIImagePlugin(Star):
             provider_id: str | None = None,
             llm_tool_failure: bool = False,
             image_url: str = "",
+            prefetched_image_bytes: bytes | None = None,
     ) -> None:
         try:
-            image_bytes: bytes | None = None
+            image_bytes: bytes | None = prefetched_image_bytes
+            had_image = False
+
             if image_url:
                 image_url = image_url.strip()
                 if image_url:
@@ -2199,6 +2255,8 @@ class GiteeAIImagePlugin(Star):
                         logger.warning(f"[视频] 读取 image_url 失败: {e}")
 
             if not image_bytes:
+                # 没有预提取的 bytes，尝试从 event 提取
+                # 注意：如果异步任务调度时事件已结束，临时文件可能已被清理
                 image_segs = await get_images_from_event(
                     event,
                     include_avatar=True,
@@ -2215,10 +2273,6 @@ class GiteeAIImagePlugin(Star):
                                 image_url = seg_url
                         break
                     except Exception as e:
-                        # convert_to_base64 在 seg.url 指向已被清理的 AstrBot 临时缓存
-                        # （如 /AstrBot/data/temp/media_image_xxx.jpg）时会抛
-                        # FileNotFoundError。这里 fallback 到 seg.file / seg.path，
-                        # 它们可能是 base64://、data:、file://、http(s):// 或裸路径。
                         logger.warning(f"[视频] 图片 {i + 1} convert_to_base64 失败，尝试字段 fallback: {e}")
                         fallback_bytes, fallback_url = await self._extract_image_bytes_from_seg(seg)
                         if fallback_bytes:
@@ -2233,22 +2287,23 @@ class GiteeAIImagePlugin(Star):
                             break
                         logger.warning(f"[视频] 图片 {i + 1} 所有字段均失败，跳过")
 
-                if image_bytes and (not image_url or not image_url.startswith(("http://", "https://"))):
-                    from .core.grok_video_service import _build_data_url
-                    image_url = _build_data_url(image_bytes)
-                    logger.info(
-                        "[视频] image_url 非远程链接，已从 image_bytes 构建 data URL: "
-                        "size=%s bytes, data URL 长度=%s",
-                        len(image_bytes),
-                        len(image_url),
-                    )
+            # 构建 data URL（如果有 bytes 但没有远程 URL）
+            if image_bytes and (not image_url or not image_url.startswith(("http://", "https://"))):
+                from .core.grok_video_service import _build_data_url
+                image_url = _build_data_url(image_bytes)
+                logger.info(
+                    "[视频] image_url 非远程链接，已从 image_bytes 构建 data URL: "
+                    "size=%s bytes, data URL 长度=%s",
+                    len(image_bytes),
+                    len(image_url),
+                )
 
-                if had_image and not image_bytes:
-                    if llm_tool_failure:
-                        await self._signal_llm_tool_failure(event)
-                    else:
-                        await mark_failed(event)
-                    return
+            if had_image and not image_bytes:
+                if llm_tool_failure:
+                    await self._signal_llm_tool_failure(event)
+                else:
+                    await mark_failed(event)
+                return
 
             t_start = time.perf_counter()
             candidates = (
