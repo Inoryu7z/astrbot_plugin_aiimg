@@ -1,6 +1,13 @@
-### v1.8.1
+### v1.8.2
 
-**🐛 修复：引用/附带图片生成视频全部失败**
+**🐛 修复：GrokVideo3 轮询状态识别失败导致请求爆炸**
+
+*   根因：中转站（如 magic666.top）轮询返回的顶层 `status` 是大写 `SUCCESS`，且 `video_url` 嵌套在 `data` 对象里，代码只认小写 `completed`/`succeeded` 和顶层 `video_url`，导致任务成功但代码永远识别不到，触发重新创建任务 + 切换模型，3 模型 × 3 次 = 9 次请求
+*   修复状态识别：支持大写 `SUCCESS`/`ERROR`，video_url 提取支持 `data.video_url` 嵌套 + `_deep_find_video_url` 兜底
+*   修复失败信息提取：支持 `fail_reason`/`message` 字段
+*   降低 `retry_delay` 默认值：2 → 0（多模型级联已有 fallback，单模型不需要重试）
+
+### v1.8.1
 
 *   根因：AstrBot PreProcessStage 会把 Image 的 url/file/path 三个字段全部覆盖为本地临时缓存路径（`/AstrBot/data/temp/media_image_xxx.jpg`），并在事件生命周期结束时清理。`_async_generate_video` 通过 `asyncio.create_task` 异步调度，事件结束后临时文件被清理，异步任务再读图片就会 FileNotFoundError
 *   修复：新增 `_prefetch_image_from_event` 方法，在 `create_task` 之前（事件同步阶段，临时文件还存在）预提取 image_bytes，传给异步任务
