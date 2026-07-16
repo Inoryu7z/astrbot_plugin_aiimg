@@ -33,6 +33,8 @@ class EditRouter:
 
         self.presets = self._load_presets()
 
+        self.last_success_provider: str | None = None
+
         logger.info(
             "[EditRouter] Initialized: presets=%s, providers=%s",
             len(self.presets),
@@ -192,6 +194,7 @@ class EditRouter:
                         )
                     if not result:
                         raise RuntimeError("Provider returned empty edit result")
+                    self.last_success_provider = pid
                     logger.info(
                         "[edit] Provider=%s success in %.2fs",
                         pid,

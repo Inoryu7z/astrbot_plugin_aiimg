@@ -1,55 +1,45 @@
+### v1.8.3
+
+**🔧 补拍额度计数策略重构**
+
+*   修复手动自拍额度计数与服务商实际消耗对不上的问题：根因为 `_track_selfie_quota` 按链路顺序 reserve 第一个 provider，但手动自拍走 `edit_router` 链路兜底时实际成功的 provider 可能是后面的，导致计数错位
+*   `edit_router` 新增 `last_success_provider` 属性记录实际成功的 provider_id
+*   `_generate_selfie_image` 返回 `(Path, used_pid)`，逐层透传到 `_track_selfie_quota`，用实际 provider reserve 而非链路第一个
+*   `DailyQuotaCounter` 计数 key 从 `provider_id` 改为 `persona_name::provider_id`，所有方法增加 `persona_name` 参数
+*   保留失败 release 逻辑（网络超时频繁，避免额度被耗尽导致补拍不够数）
+
+---
+
 ### v1.8.2
 
-**🐛 修复：GrokVideo3 轮询状态识别失败导致请求爆炸**
+**🐛 修复 GrokVideo3 轮询状态识别失败导致请求爆炸**
 
-*   根因：中转站（如 magic666.top）轮询返回的顶层 `status` 是大写 `SUCCESS`，且 `video_url` 嵌套在 `data` 对象里，代码只认小写 `completed`/`succeeded` 和顶层 `video_url`，导致任务成功但代码永远识别不到，触发重新创建任务 + 切换模型，3 模型 × 3 次 = 9 次请求
-*   修复状态识别：支持大写 `SUCCESS`/`ERROR`，video_url 提取支持 `data.video_url` 嵌套 + `_deep_find_video_url` 兜底
-*   修复失败信息提取：支持 `fail_reason`/`message` 字段
-*   降低 `retry_delay` 默认值：2 → 0（多模型级联已有 fallback，单模型不需要重试）
+*   修复中转站轮询返回大写 `SUCCESS` 状态时无法识别，导致任务成功但代码持续重试，3 模型 × 3 次 = 9 次请求
+*   状态识别支持大写 `SUCCESS`/`ERROR`，`video_url` 提取支持 `data.video_url` 嵌套
+*   降低 `retry_delay` 默认值：2 → 0（多模型级联已有 fallback）
+
+---
 
 ### v1.8.1
 
-*   根因：AstrBot PreProcessStage 会把 Image 的 url/file/path 三个字段全部覆盖为本地临时缓存路径（`/AstrBot/data/temp/media_image_xxx.jpg`），并在事件生命周期结束时清理。`_async_generate_video` 通过 `asyncio.create_task` 异步调度，事件结束后临时文件被清理，异步任务再读图片就会 FileNotFoundError
-*   修复：新增 `_prefetch_image_from_event` 方法，在 `create_task` 之前（事件同步阶段，临时文件还存在）预提取 image_bytes，传给异步任务
-*   三个视频调用点（/视频 命令、regex fallback、LLM tool）均在 create_task 之前调用预提取
-*   新增 `_extract_image_bytes_from_seg` fallback：convert_to_base64 失败时，按 url → file → path 顺序尝试 http(s) 下载 / base64 解码 / file:// 解析 / 裸本地路径读取
-*   该 Bug 影响所有视频后端（豆包、Grok multipart、官方 Grok），导致引用图片或附带图片调用 `/视频` 全部走文生视频回退路径
+**🐛 修复引用图片生成视频全部失败 + 后端重命名**
 
-**🔧 后端重命名与配置澄清**
-
-*   `grok_video_3` 模板重命名为 `grok_video_multipart`，名称更直白地体现协议特征（避免与官方 Grok 混淆）。保留 `grok_video_3` 作为别名兼容旧配置
-*   `grok_video_multipart` description/hint 明确对应文档：s.apifox 410343373、poloapi 422941674e0，并标注"multipart 协议，与官方 /v1/videos/generations 不兼容"
-*   `official_grok_video` description/hint 明确"仅适用于完全兼容 xAI 官方协议的端点，不兼容 multipart 协议的 s.apifox/poloapi"
-*   `grok_video_multipart` 的 `aspect_ratio` 从 `options` 下拉框（仅 2:3/3:2/1:1）改为自由字符串输入，默认 16:9
-*   `grok_video_multipart` 的 `size` hint 补充大小写差异说明
+*   修复图生视频 FileNotFoundError：AstrBot PreProcessStage 在事件结束后清理临时图片文件，异步任务读图时已不存在。新增 `_prefetch_image_from_event` 在 `create_task` 前预提取 image_bytes
+*   新增 `_extract_image_bytes_from_seg` fallback：按 url → file → path 顺序尝试下载/解码/读取
+*   `grok_video_3` 模板重命名为 `grok_video_multipart`，保留旧名兼容
+*   `grok_video_multipart` 的 `aspect_ratio` 从下拉框改为自由字符串输入，默认 16:9
 
 ---
 
 ### v1.8.0
 
-**🚀 视频后端重构：移除云雾旧格式 + 新增 Grok Video 3 multipart 后端**
+**🚀 视频后端重构：移除云雾旧格式 + 新增 Grok Video 3 + 多模型级联**
 
-*   移除「真 Grok」（yunwu_grok_video，基于 yunwu.ai `/v1/videos` + `/v1/video/query`）和「假 Grok」（yunwu_grok_video_3，基于 yunwu.ai `/v1/video/create` + `/v1/video/query`）两个视频后端，不再支持云雾旧格式 API（不做兼容迁移）
-*   新增 `grok_video_3` 视频后端模板：基于 multipart/form-data 协议，适用于 PoloAI（https://poloai.top）和 s.apifox 等兼容接口
-    *   POST `/v1/videos`（multipart）：model / prompt / aspect_ratio(2:3,3:2,1:1) / seconds / size(720P,1080P) / input_reference(文件上传)
-    *   GET `/v1/videos/{task_id}` 轮询：status(queued/processing/completed/failed/cancelled)，完成返回 video_url
-    *   支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s) 三种模型
-    *   参考图支持远程 URL 和本地文件上传两种方式（自动压缩）
-*   `OfficialGrokVideoService` 适配 PoloAI 官方兼容格式：响应解析同时兼容 xAI 原生 `request_id` 和 PoloAI 返回的 `id` / `task_id` 字段
-*   `provider_registry.py` 同步移除 yunwu_grok_video / yunwu_grok_video_3 注册分支，新增 grok_video_3 注册分支和验证规则
-
-**✨ 新功能：视频后端多模型级联**
-
-*   新增 `MultiModelVideoCascade` 包装类：同一个 baseurl/apikey 下可配置多个模型名，按顺序尝试，失败自动切换下一个（效仿 TrueGrok 的 provider 级级联，但粒度为模型级）
-*   所有视频后端模板（grok_video / grok_video_3 / official_grok_video）新增 `models` 字段（字符串列表），非空时优先启用级联，留空则回退到 `model` 单模型模式
-*   `provider_registry.get_video_backend` 自动检测 `models` 字段并包装底层后端（truegrok 除外，其本身已是 provider 级级联）
-*   典型用法：在一个 grok_video_3 后端配置 `models: ["grok-video-3", "grok-video-3-pro", "grok-video-3-max"]`，自动从便宜的 6s 模型开始尝试，失败切换到更强的模型
-*   完全向后兼容：不填 `models` 字段时行为不变
-
-**🔧 配置提示更新**
-
-*   `truegrok` 模板 hint 更新：移除已删除的「真Grok→假Grok」示例，改为通用描述并提示可配合多模型级联使用
-*   `official_grok_video` 模板 hint 更新：移除云雾引用，补充 PoloAI 官方兼容地址示例
+*   移除云雾旧格式后端 `yunwu_grok_video` / `yunwu_grok_video_3`（不做兼容迁移，旧配置需手动改为新后端）
+*   新增 `grok_video_3` 视频后端模板：基于 multipart/form-data 协议，适用于 PoloAI / s.apifox 等兼容接口，支持参考图远程 URL 和本地文件上传
+*   `OfficialGrokVideoService` 适配 PoloAI 官方兼容格式：request_id 提取兼容 `id` / `task_id` 字段
+*   新增 `MultiModelVideoCascade` 包装类：同一后端下按顺序尝试多个模型名，失败自动切换。所有视频后端模板新增 `models` 字段（留空则回退单模型模式）
+*   `truegrok` / `official_grok_video` 模板 hint 更新：移除云雾引用
 
 ---
 
