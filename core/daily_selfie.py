@@ -76,53 +76,69 @@ class DailyQuotaCounter:
     async def _save_async(self):
         await asyncio.to_thread(self._save)
 
-    async def increment(self, provider_id: str, amount: int = 1) -> int:
+    @staticmethod
+    def _key(persona_name: str, provider_id: str) -> str:
+        return f"{persona_name}::{provider_id}"
+
+    async def increment(self, persona_name: str, provider_id: str, amount: int = 1) -> int:
         async with self._lock:
             self._ensure_date()
             counts = self._data.setdefault("counts", {})
-            cur = int(counts.get(provider_id, 0))
+            key = self._key(persona_name, provider_id)
+            cur = int(counts.get(key, 0))
             new_val = cur + amount
-            counts[provider_id] = new_val
+            counts[key] = new_val
             await self._save_async()
             return new_val
 
-    async def get_count(self, provider_id: str) -> int:
+    async def get_count(self, persona_name: str, provider_id: str) -> int:
         async with self._lock:
             self._ensure_date()
             counts = self._data.get("counts", {})
-            return int(counts.get(provider_id, 0))
+            return int(counts.get(self._key(persona_name, provider_id), 0))
 
-    async def get_all_counts(self) -> dict[str, int]:
+    async def get_all_counts(self, persona_name: str) -> dict[str, int]:
+        """返回指定 persona 下所有 provider 的计数（key 为裸 provider_id）。"""
+        prefix = f"{persona_name}::"
         async with self._lock:
             self._ensure_date()
-            return dict(self._data.get("counts", {}))
+            counts = self._data.get("counts", {})
+            out: dict[str, int] = {}
+            for k, v in counts.items():
+                if isinstance(k, str) and k.startswith(prefix):
+                    pid = k[len(prefix):]
+                    if pid:
+                        out[pid] = int(v)
+            return out
 
-    async def get_remaining(self, provider_id: str, limit: int) -> int:
-        count = await self.get_count(provider_id)
+    async def get_remaining(self, persona_name: str, provider_id: str, limit: int) -> int:
+        count = await self.get_count(persona_name, provider_id)
         return max(0, limit - count)
 
-    async def reserve(self, provider_id: str, limit: int) -> bool:
+    async def reserve(self, persona_name: str, provider_id: str, limit: int) -> bool:
         """原子性预留额度：检查剩余 > 0 时递增，返回 True 表示预留成功。"""
         async with self._lock:
             self._ensure_date()
             counts = self._data.setdefault("counts", {})
-            cur = int(counts.get(provider_id, 0))
+            key = self._key(persona_name, provider_id)
+            cur = int(counts.get(key, 0))
             if cur >= limit:
                 return False
-            counts[provider_id] = cur + 1
+            counts[key] = cur + 1
             await self._save_async()
             return True
 
-    async def release(self, provider_id: str) -> None:
-        """释放之前预留的额度（生图失败时回退）。"""
+    async def release(self, persona_name: str, provider_id: str) -> None:
+        """释放之前预留的额度（生图失败且服务商未计费时回退，允许重试）。"""
         async with self._lock:
             self._ensure_date()
             counts = self._data.setdefault("counts", {})
-            cur = max(0, int(counts.get(provider_id, 0)) - 1)
+            key = self._key(persona_name, provider_id)
+            cur = max(0, int(counts.get(key, 0)) - 1)
             if cur <= 0:
-                counts.pop(provider_id, None)
+                counts.pop(key, None)
             else:
-                counts[provider_id] = cur
+                counts[key] = cur
             await self._save_async()
 
     def get_date(self) -> str:
@@ -644,7 +660,7 @@ class DailySelfieService:
             for p in personas:
                 total_remaining = 0
                 for pv in p["providers"]:
-                    total_remaining += await self.counter.get_remaining(pv["provider_id"], pv["daily_limit"])
+                    total_remaining += await self.counter.get_remaining(p["persona_name"], pv["provider_id"], pv["daily_limit"])
                 if total_remaining <= 0:
                     logger.info("[DailySelfie] 人格 %s 所有提供商额度已用完，跳过", p["persona_name"])
                     continue
@@ -998,7 +1014,7 @@ class DailySelfieService:
                 if i < len(task_prompts):
                     prompt_text, ref_info, _pid = task_prompts[i]
                     if _pid:
-                        await self.counter.release(_pid)
+                        await self.counter.release(persona_name, _pid)
                     ref_path = ref_info.get("image_path", "") if ref_info else ""
                     ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
                     failed_items.append((prompt_text, ref_path, ref_strength))
@@ -1042,13 +1058,13 @@ class DailySelfieService:
                             success += 1
                             fail -= 1
                         else:
-                            await self.counter.release(selected_pid)
+                            await self.counter.release(persona_name, selected_pid)
                             logger.warning("[DailySelfie] 人格 %s 重试返回空路径", persona_name)
                     except asyncio.TimeoutError:
-                        await self.counter.release(selected_pid)
+                        await self.counter.release(persona_name, selected_pid)
                         logger.error("[DailySelfie] 人格 %s 重试超时(300s)", persona_name)
                     except Exception as e:
-                        await self.counter.release(selected_pid)
+                        await self.counter.release(persona_name, selected_pid)
                         logger.error("[DailySelfie] 人格 %s 重试失败: %s", persona_name, e)
 
         for pid, paths in provider_success.items():
@@ -1059,11 +1075,12 @@ class DailySelfieService:
         return success, fail
 
     async def _reserve_provider(self, persona: dict) -> str | None:
+        pname = persona["persona_name"]
         for pv in persona["providers"]:
             pid = pv["provider_id"]
             limit = pv["daily_limit"]
-            if await self.counter.reserve(pid, limit):
-                logger.debug("[DailySelfie] 预留额度: provider=%s limit=%s", pid, limit)
+            if await self.counter.reserve(pname, pid, limit):
+                logger.debug("[DailySelfie] 预留额度: persona=%s provider=%s limit=%s", pname, pid, limit)
                 return pid
         return None
 
@@ -1731,12 +1748,12 @@ class DailySelfieService:
 
     async def get_status(self) -> dict[str, Any]:
         personas = self._get_enabled_personas()
-        counts = await self.counter.get_all_counts()
         status = {
             "date": self.counter.get_date(),
             "personas": [],
         }
         for p in personas:
+            counts = await self.counter.get_all_counts(p["persona_name"])
             persona_status = {
                 "persona_name": p["persona_name"],
                 "providers": [],
