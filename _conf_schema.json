@@ -249,7 +249,35 @@
           "daily_selfie_chat_provider_id": {
             "type": "string",
             "description": "补画对话模型",
-            "hint": "补画时用于生成风格查询和构建提示词的 LLM 提供商。留空则使用当前会话的对话模型。",
+            "hint": "补画时的默认 LLM 提供商。当某个轮次（r1场景/r2设计/r3审核/r4翻译）的专用提供商留空时，回退到此处的对话模型。留空则使用当前会话的对话模型。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "daily_selfie_scene_provider_id": {
+            "type": "string",
+            "description": "r1 场景设计提供商",
+            "hint": "补拍 r1 轮：生成场景概念的 LLM 提供商。留空则回退到「补画对话模型」。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "daily_selfie_designer_provider_id": {
+            "type": "string",
+            "description": "r2 服装设计提供商",
+            "hint": "补拍 r2 轮：设计师输出服装/外观/姿态/场景方案的 LLM 提供商。留空则回退到「补画对话模型」。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "daily_selfie_reviewer_provider_id": {
+            "type": "string",
+            "description": "r3 服装审核提供商",
+            "hint": "补拍 r3 轮：审核师对设计方案做美学审查并可能给出改进版的 LLM 提供商。建议使用与 r2 设计相同或更强的模型。留空则回退到「补画对话模型」。",
+            "default": "",
+            "_special": "select_provider"
+          },
+          "daily_selfie_prompt_engineer_provider_id": {
+            "type": "string",
+            "description": "r4 提示词翻译提供商",
+            "hint": "补拍 r4 轮：将设计方案翻译为生图提示词的 LLM 提供商。留空则回退到「补画对话模型」。",
             "default": "",
             "_special": "select_provider"
           },
@@ -385,13 +413,6 @@
             "type": "string",
             "description": "说说配文多模态模型",
             "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
-            "default": "",
-            "_special": "select_provider"
-          },
-          "costume_designer_provider_id": {
-            "type": "string",
-            "description": "创意设计提供商（无参考图时）",
-            "hint": "补拍搜图无参考图时，调用此提供商进行专业服装与场景设计，再由对话模型生成提示词。留空则由对话模型自行构建提示词（现有行为）。",
             "default": "",
             "_special": "select_provider"
           },
@@ -538,13 +559,6 @@
             "default": "",
             "_special": "select_provider"
           },
-          "costume_designer_provider_id": {
-            "type": "string",
-            "description": "创意设计提供商（无参考图时）",
-            "hint": "补拍搜图无参考图时，调用此提供商进行专业服装与场景设计，再由对话模型生成提示词。留空则由对话模型自行构建提示词（现有行为）。",
-            "default": "",
-            "_special": "select_provider"
-          },
           "costume_designer_system_prompt": {
             "type": "text",
             "description": "创意设计系统提示词（补画第3轮）",
@@ -685,13 +699,6 @@
             "type": "string",
             "description": "说说配文多模态模型",
             "hint": "补画完成后用于看图写说说配文的 LLM 提供商。需要支持多模态（图片输入）。留空或不启用上方开关则不会发布。",
-            "default": "",
-            "_special": "select_provider"
-          },
-          "costume_designer_provider_id": {
-            "type": "string",
-            "description": "创意设计提供商（无参考图时）",
-            "hint": "补拍搜图无参考图时，调用此提供商进行专业服装与场景设计，再由对话模型生成提示词。留空则由对话模型自行构建提示词（现有行为）。",
             "default": "",
             "_special": "select_provider"
           },

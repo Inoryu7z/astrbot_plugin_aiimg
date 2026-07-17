@@ -755,13 +755,6 @@ class DailySelfieService:
             pass
         return None
 
-    def _get_costume_designer_provider_id(self, persona: dict) -> str | None:
-        persona_conf = persona.get("config", {})
-        configured = str(persona_conf.get("costume_designer_provider_id", "") or "").strip()
-        if configured:
-            return configured
-        return None
-
     def _get_costume_designer_system_prompt(self, persona: dict) -> str:
         """读取人格级创意设计系统提示词，留空则回退到内置默认常量。"""
         persona_conf = persona.get("config", {})
@@ -769,6 +762,24 @@ class DailySelfieService:
         if configured:
             return configured
         return _COSTUME_DESIGNER_SYSTEM_PROMPT
+
+    def _get_selfie_provider(self, stage: str, umo: str = "") -> str | None:
+        """获取补拍指定轮次的 LLM provider。
+
+        优先级：stage 全局配置 > daily_selfie_chat_provider_id > umo 会话 > 系统默认。
+        stage ∈ {"scene"(r1), "designer"(r2), "reviewer"(r3), "prompt_engineer"(r4)}。
+        """
+        selfie_conf = self.plugin._get_feature("selfie")
+        key_map = {
+            "scene": "daily_selfie_scene_provider_id",
+            "designer": "daily_selfie_designer_provider_id",
+            "reviewer": "daily_selfie_reviewer_provider_id",
+            "prompt_engineer": "daily_selfie_prompt_engineer_provider_id",
+        }
+        configured = str(selfie_conf.get(key_map.get(stage, ""), "") or "").strip()
+        if configured:
+            return configured
+        return self._get_chat_provider_id(umo)
 
     def _get_prompt_engineer_system_prompt(self, persona: dict) -> str:
         """读取人格级提示词构建系统提示词，留空则回退到内置默认常量。"""
@@ -843,8 +854,14 @@ class DailySelfieService:
             logger.error("[DailySelfie] 无法获取默认 LLM Provider，跳过人格 %s", persona_name)
             return 0, 0
 
+        # 各轮次专用 provider（留空则回退到 chat_provider_id）
+        scene_provider_id = self._get_selfie_provider("scene", umo) or chat_provider_id
+        designer_provider_id = self._get_selfie_provider("designer", umo) or chat_provider_id
+        reviewer_provider_id = self._get_selfie_provider("reviewer", umo) or chat_provider_id
+        prompt_engineer_provider_id = self._get_selfie_provider("prompt_engineer", umo) or chat_provider_id
+
         styles_task = self._select_styles_by_algorithm(remaining, style_pool, recent_styles)
-        scenes_task = self._llm_round2_scene(chat_provider_id, remaining)
+        scenes_task = self._llm_round1_scene(scene_provider_id, remaining)
 
         styles, scenes = await asyncio.gather(styles_task, scenes_task)
 
@@ -902,10 +919,6 @@ class DailySelfieService:
                 ref_descriptions.append("")
                 ref_by_index.append(None)
 
-        costume_provider_id = self._get_costume_designer_provider_id(persona)
-        if not costume_provider_id:
-            costume_provider_id = chat_provider_id
-
         costume_system_prompt = self._get_costume_designer_system_prompt(persona)
         prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona)
 
@@ -928,8 +941,8 @@ class DailySelfieService:
                 persona_name, batch_num, total_batches, len(batch_styles),
             )
 
-            designs = await self._llm_round3_design(
-                costume_provider_id, batch_styles, batch_scenes,
+            designs = await self._llm_round2_design(
+                designer_provider_id, batch_styles, batch_scenes,
                 ref_descriptions=non_empty_refs if non_empty_refs else None,
                 system_prompt=costume_system_prompt,
             )
@@ -943,7 +956,7 @@ class DailySelfieService:
 
             # r3: 审核环节，对设计师输出做美学审核并可能给出改进版
             designs = await self._llm_round3_review(
-                chat_provider_id, batch_styles, batch_scenes, designs,
+                reviewer_provider_id, batch_styles, batch_scenes, designs,
             )
 
             actual_count = min(len(designs), len(batch_styles))
@@ -964,7 +977,7 @@ class DailySelfieService:
             batch_designs = all_designs[batch_start:batch_start + design_batch_size]
             batch_refs = all_ref_by_design[batch_start:batch_start + design_batch_size]
 
-            prompts = await self._llm_round4_prompt(batch_designs, chat_provider_id, system_prompt=prompt_engineer_system_prompt)
+            prompts = await self._llm_round4_prompt(batch_designs, prompt_engineer_provider_id, system_prompt=prompt_engineer_system_prompt)
             logger.info(
                 "[DailySelfie] 人格 %s 第4轮批次 %d/%d 返回 %d 条提示词",
                 persona_name, batch_num, design_total_batches, len(prompts),
@@ -1406,14 +1419,14 @@ class DailySelfieService:
         recent_pool = [s for s in style_pool if s in recent_set]
 
         if fresh_pool and len(fresh_pool) >= count:
-            picked = self._weighted_sample(fresh_pool, count)
+            picked = self._random_sample(fresh_pool, count)
         elif fresh_pool:
             picked = list(fresh_pool)
             need = count - len(picked)
             if need > 0 and recent_pool:
-                picked.extend(self._weighted_sample(recent_pool, min(need, len(recent_pool))))
+                picked.extend(self._random_sample(recent_pool, min(need, len(recent_pool))))
         else:
-            picked = self._weighted_sample(style_pool, min(count, len(style_pool)))
+            picked = self._random_sample(style_pool, min(count, len(style_pool)))
 
         picked = picked[:count]
         logger.info(
@@ -1423,18 +1436,18 @@ class DailySelfieService:
         return picked
 
     @staticmethod
-    def _weighted_sample(pool: list[str], k: int) -> list[str]:
-        """从 pool 中随机抽取 k 个不重复元素（无权重配置时的等概率抽样）。"""
+    def _random_sample(pool: list[str], k: int) -> list[str]:
+        """从 pool 中等概率随机抽取 k 个不重复元素。"""
         if not pool or k <= 0:
             return []
         k = min(k, len(pool))
         try:
             return random.sample(pool, k)
         except Exception as e:
-            logger.warning("[DailySelfie] 加权抽样失败，回退到普通抽样: %s", e)
+            logger.warning("[DailySelfie] 随机抽样失败，回退: %s", e)
             return random.sample(pool, min(k, len(pool)))
 
-    async def _llm_round2_scene(
+    async def _llm_round1_scene(
         self,
         chat_provider_id: str,
         count: int,
@@ -1502,7 +1515,7 @@ class DailySelfieService:
                 return []
         return []
 
-    async def _llm_round3_design(
+    async def _llm_round2_design(
         self,
         costume_provider_id: str,
         styles: list[str],
@@ -1733,7 +1746,9 @@ class DailySelfieService:
                     "[DailySelfie] 设计 %d 审核未通过，应用改进版。issues: %s",
                     i, issues,
                 )
-                final.append(improved)
+                # merge：审核师改进版可能只返回修改过的字段，未修改字段保留原设计
+                merged = {**design, **improved} if isinstance(design, dict) else improved
+                final.append(merged)
 
         return final
 
