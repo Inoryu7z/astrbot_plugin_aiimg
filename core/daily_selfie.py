@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import random
 import re
 import tempfile
 import uuid
@@ -145,19 +146,6 @@ class DailyQuotaCounter:
         return self._data.get("date", "")
 
 
-_TASK_MODE_SYSTEM_PROMPT = (
-    "【风格选择任务】\n\n"
-    "当收到自动拍照任务时，你需要完成以下核心任务：\n"
-    "从风格池中选择 {count} 种风格。你的唯一输出就是风格名称，一行一个，不需要任何额外描述。\n\n"
-    "选择策略：\n"
-    "1. 避免近期重复：优先排除近期已拍过的风格，让每次拍摄都有新鲜感\n"
-    "2. 广度覆盖：在可选范围内尽量覆盖不同类型的服装风格\n\n"
-    "约束：\n"
-    "- 只输出风格名称，每条一行，不编号、不解释、不描述\n"
-    "- 禁止输出风格以外的任何内容\n"
-    "- 禁止调用aiimg_generate工具"
-)
-
 _DAILY_SELFIE_REF_HINT = (
     "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
     "不要模仿图4（即本描述指向的图片）的构图和姿势。"
@@ -186,14 +174,6 @@ def _build_strength_hint(ref_strength: str) -> str:
             "请使用有图流程，以图4（即本描述指向的图片）为模仿对象，"
             "保留其服装与氛围，微调姿势和构图。"
         )
-
-
-_ROUND1_USER_PROMPT = (
-    "今天的拍照额度还剩 {remaining} 次。\n\n"
-    "衣橱中可选的风格：\n{style_pool}\n\n"
-    "近3天已拍过的风格：\n{recent_styles}\n\n"
-    "请选择 {remaining} 种不同的风格。直接返回 {remaining} 个风格名称，每个一行。"
-)
 
 _ROUND2_SCENE_SYSTEM_PROMPT = (
     "【场景概念生成任务】\n\n"
@@ -225,118 +205,160 @@ _ROUND3_USER_PROMPT = (
 )
 
 _COSTUME_DESIGNER_SYSTEM_PROMPT = (
-    "你是一位创意总监，专精于为写真拍摄构思完整的视觉方案。你不仅设计服装，更设计每一条拍摄方案的完整视觉概念——从服装到姿态到场景，一切围绕统一的视觉主题展开。\n\n"
-    "## 核心任务\n\n"
-    "根据给出的拍摄方案描述，为每条方案设计完整的视觉方案。每条方案必须是一个概念统一、细节极度丰满、视觉可执行的拍摄蓝图。\n\n"
+    "你是专业服饰设计师。你的任务是为写真拍摄设计完整的穿搭方案。"
+    "你的核心价值是设计能力——基于风格本质和场景张力创作有审美高度的方案，而非套模板。\n\n"
+    "## 工作方式\n\n"
+    "对每个（风格+场景）配对，独立完成以下步骤：\n\n"
+    "### 第一步：设计语言锚定\n"
+    "在开始设计前，先构思该风格的设计语言三要素：\n"
+    "- 色彩哲学：该风格的核心色系与配色逻辑是什么？（如莫兰迪色系、高饱和撞色、同色系层次等）\n"
+    "- 廓形语言：该风格的典型廓形、层次关系与比例规则是什么？（如A字、收腰蓬裙、落肩oversized等）\n"
+    "- 材质情绪：该风格的标志性材质及其传达的情绪基调是什么？（如丝绸=优雅流动、皮革=硬朗力量、蕾丝=精致柔美等）\n\n"
+    "### 第二步：经典搭配优先\n"
+    "优先选择该风格广为人知的经典搭配组合——经典搭配经过验证，不易踩雷。"
+    "若经典搭配与场景存在张力，不要为了调和张力而放弃经典款，而是在经典款基础上设计一个能让两者共存的视觉故事。\n\n"
+    "### 第三步：利用风格-场景张力\n"
+    "当风格与场景天然存在张力（如汉服+现代美术馆、JK+深夜便利店），这是设计的核心机会而非问题。"
+    "设计师的任务是在张力中构思一个能讲得通的视觉故事，让两者不是简单共存而是互相激发。"
+    "禁止两种偷懒做法：①为了氛围统一把场景拉回风格的本源场景（如汉服硬配茶室）②无视场景只设计服装让画面割裂。\n\n"
     "## 最高优先级约束\n\n"
     "**面部必须完整露出。** 绝对不允许挡脸、遮脸、侧脸只露半脸、用手或物品遮挡面部。没有任何例外。此约束覆盖一切设计考量。\n\n"
     "**必须留有刘海遮住额头。** 不允许露出大面积额头的发型（如大光明、全部后梳等），刘海必须覆盖前额区域。\n\n"
     "**不允许高马尾。** 任何方案中不得出现高马尾发型。\n\n"
     "**不允许佩戴眼镜。** 任何方案中不得出现眼镜、墨镜等眼部饰品。\n\n"
-    "## 可视化全覆盖原则\n\n"
-    "画面中所有确定出现的视觉元素都必须被描述，不允许出现\"画面中存在但未被文字覆盖\"的视觉信息。这不是要求面面俱到地罗列，而是要求对每个可见元素都给出足够具体的视觉信息，使读者仅凭文字就能精确还原画面。\n\n"
-    "\"确定出现\"是指你作为设计师决定让该元素出现在画面中。一旦你决定某个元素出现在画面中，就必须写到位，不允许一笔带过。如果你决定该方案不需要某个元素（如不需要配饰、不需要道具），则无需描述——不存在于画面中的东西自然不需要描述。\n\n"
     "## 输出格式\n\n"
-    "严格返回 JSON 数组，每个元素包含四个字段：\n\n"
-    "### clothing（服装设计）\n\n"
+    "严格返回 JSON 数组，每个元素对应一个配对方案，包含四个字段：\n\n"
+    "### clothing（服装设计）\n"
     "必须覆盖以下维度：\n"
     "- **款式**：具体的服装类型与剪裁，必须精确到版型（如\"方领泡泡袖短款A字连衣裙\"而非\"连衣裙\"，\"高腰包臀铅笔裙\"而非\"裙子\"）\n"
     "- **材质**：面料质感与触感暗示（如\"丝缎光泽\"\"棉麻哑光\"\"针织纹理\"\"雪纺半透\"\"蕾丝镂空\"）\n"
-    "- **色彩**：主色、辅色、点缀色的具体描述（如\"奶白色底，领口与袖口薄荷绿滚边，腰间系一条浅粉色缎带\"）\n"
-    "- **层次**：内外搭配结构，从最外层到最内层逐层描述（如\"外穿半透明白色薄纱衬衫，内搭奶白色蕾丝边吊带背心\"）\n"
-    "- **穿着状态**：服装在身体上的实际状态。修身服装必须描述与身体曲线的互动——如何被撑起、贴合、勾勒轮廓；宽松服装描述面料的悬垂、垂坠、随动作的摆动；层次搭配描述层与层之间的可见关系。同时关注动作带来的动态穿着效果——行走时裙摆的摆动、转身时面料的飘动、弯腰时衣物的拉伸（如\"衬衫在胸前被饱满的曲线撑起，第二颗纽扣间的缝隙微微张开\"\"针织裙紧密贴合腰臀曲线，在胯部勾勒出饱满的轮廓\"\"牛仔夹克敞开穿着，下摆随步伐微微摆动，内搭卫衣下摆及腰露出一小截腰腹皮肤\"\"行走间丝质裙摆随步伐轻轻摇曳，在膝弯处形成柔软的褶皱\"）\n"
-    "- **袜类**：丝袜/过膝袜/短袜等的完整规格——厚度（如\"15D超薄\"\"80D微透\"\"120D不透\"）、花纹（如\"纯色\"\"背部接缝线\"\"蕾丝花边\"\"暗纹提花\"）、长度（如\"及踝\"\"过膝\"\"大腿中部\"\"连裤\"）、特殊款式（如\"吊带袜夹固定\"\"开趾\"\"踩脚\"\"防滑硅胶腰边\"），若无袜类则写\"裸足\"或\"光腿\"\n"
-    "- **鞋类**：鞋型（如\"尖头细跟\"\"圆头平底\"\"系带马丁靴\"）、材质（如\"漆皮\"\"哑光皮革\"\"绒面\"）、颜色、鞋跟高度与类型（如\"8cm细跟\"\"3cm粗跟\"\"平底\"）、装饰细节（如\"脚踝绑带\"\"蝴蝶结\"\"金属扣\"），若为裸足则写\"裸足\"\n"
-    "- **配饰**：与服装风格协调的饰品，每件配饰必须具体到材质、形态、尺寸（如\"锁骨链，925银细链，水滴形月光石吊坠约1cm\"\"左手腕三圈缠绕的淡水珍珠手链\"\"右手中指佩戴简约银色素圈戒指\"），若方案不需要配饰可省略\n\n"
-    "### appearance（外观造型）\n\n"
-    "必须覆盖以下维度：\n"
-    "- **发型**：头发的造型、长度、颜色与状态（如\"黑色长直发自然披散在肩上，齐刘海覆盖前额，几缕碎发垂在耳侧\"\"松散的低麻花辫搭在右肩，发尾微卷，空气刘海自然垂落\"\"齐肩栗色波波头，发尾内扣，斜刘海遮住三分之一额头\"）。发型对视觉冲击力极大，不同主题需要不同发型配合——慵懒主题配散落长发或低马尾，活力主题配双麻花辫或低双马尾，优雅主题配盘发或侧编发等。发型不得为短发，不得为高马尾。必须留有刘海覆盖前额区域，不允许露出大面积额头\n"
-    "- **指甲油**（可选）：指甲油颜色，仅用\"颜色+甲油\"格式描述（如\"裸粉色甲油\"\"黑色甲油\"），不要展开款式细节。生图模型对指甲细节的还原能力较弱，无需展开\n\n"
-    "### pose（动作姿势）\n\n"
-    "必须覆盖以下维度：\n"
-    "- **身体姿态**：躯干的朝向与弯曲度，以及身体曲线的呈现方式（如\"微微侧身，上身略向前倾，腰部自然内收，腰臀曲线在侧面形成明显的S形弧度\"）\n"
-    "- **四肢位置**：手臂与腿的具体摆放（如\"左手自然垂于身侧，右手轻撩耳侧碎发\"\"右腿微微前伸，膝盖略弯，左腿承重直立\"）\n"
-    "- **手部细节**：手指的动作与持握物（如\"指尖轻捏裙摆边缘\"\"双手交叠放在膝上\"）\n"
-    "- **头部朝向**：面部的角度与朝向（如\"面部正对镜头，下巴微抬\"\"侧转头约45度朝向镜头\"）\n"
-    "- **眼神方向**：视线的落点（如\"目光直视镜头\"或\"视线投向窗外\"）\n"
-    "- **表情与气质**：具体的面部表情，且表情必须与整体气质一致。表情不是孤立的\"微笑\"或\"严肃\"，而是气质的视觉外化——慵懒气质配半垂的眼帘和微启的唇，清冷气质配淡然的目光和自然放松的嘴角，热烈气质配明亮的眼神和上扬的嘴角，甜美气质配弯弯的笑眼和微微歪头（如\"眼神慵懒半垂，嘴角微启带着若有若无的笑意\"而非仅仅\"微笑\"）\n"
-    "- **景别**：画面的取景范围，决定观众看到的人物范围。可选景别：大特写（面部局部细节）、特写（面部为主）、近景（胸部以上）、中近景（腰部以上）、中景（膝以上）、中全景（全身可见，人物为主体）、全景（全身与环境并重）。景别应随方案的视觉焦点灵活变化，近景和特写适合突出表情与上半身互动，中景和中全景适合展示服装与全身姿态\n\n"
-    "### scene（场景环境）\n\n"
-    "必须覆盖以下维度：\n"
-    "- **具体地点**：可识别的空间类型（如\"日式榻榻米茶室\"而非\"室内\"）\n"
-    "- **环境细节**：空间中的关键视觉元素（如\"低矮木桌上摆着青瓷茶具，身后是纸糊推拉门\"）\n"
-    "- **光线氛围**：光源类型与光线质感（如\"午后阳光透过纸门洒下柔和的漫射光\"）\n"
-    "- **道具**：人物可互动的环境物件，描述其外观细节（如\"一把浅木色折扇，扇面绘有淡墨山水\"），若方案不需要道具可省略\n"
-    "- **色调**：场景的整体色彩倾向（如\"暖木色与米白为主调\"）\n"
-    "- **时间段与季节**：暗示时间与季节的光线特征和环境线索（如\"初夏午后\"\"深秋黄昏\"\"冬夜暖光\"）\n\n"
+    "- **色彩**：主色、辅色、点缀色的具体描述，配色须有明确的主次层级（主色+辅色+点缀色），禁止主色超过3个\n"
+    "- **层次**：内外搭配结构。层次来自单品自身的设计（如褶皱、叠片、不对称剪裁），而非强加外套。若该风格天然包含叠穿层次（如学院风、森女风）则保留，否则禁止为丰富层次而添加外套/开衫\n"
+    "- **穿着状态**：服装在身体上的实际状态。修身服装描述与身体曲线的互动（如何被撑起、贴合、勾勒轮廓）；宽松服装描述面料的悬垂、垂坠、随动作的摆动。注意动作带来的动态效果（如行走时裙摆摆动、转身时面料飘动）\n"
+    "- **袜类**：丝袜/过膝袜/短袜等的完整规格——厚度、花纹、长度、特殊款式。丝袜禁止天鹅绒材质。若无袜类则写\"裸足\"或\"光腿\"\n"
+    "- **鞋类**：鞋型、材质、颜色、鞋跟高度与类型、装饰细节。若为裸足则写\"裸足\"\n"
+    "- **配饰**：与服装风格协调的饰品，每件必须具体到材质、形态、尺寸。发饰为优先选择项，包/首饰/腰带为可选项。禁止为凑层次或对比而添加冗余配饰\n\n"
+    "### appearance（外观造型）\n"
+    "- **发型**：造型、长度、颜色与状态。不同主题需要不同发型配合——慵懒主题配散落长发或低马尾，活力主题配双麻花辫或低双马尾，优雅主题配盘发或侧编发等。不得为短发，不得为高马尾。必须留有刘海覆盖前额区域\n"
+    "- **指甲油**（可选）：仅用\"颜色+甲油\"格式描述，不展开款式细节\n\n"
+    "### pose（动作姿势）\n"
+    "- **身体姿态**：躯干的朝向与弯曲度，以及身体曲线的呈现方式\n"
+    "- **四肢位置**：手臂与腿的具体摆放，必须明确两只手的位置和动作\n"
+    "- **手部细节**：手指的动作与持握物。手部涉及关键动作时具体到手指动作；非焦点时简单定位即可\n"
+    "- **头部朝向**：面部的角度与朝向\n"
+    "- **眼神方向**：视线的落点\n"
+    "- **表情与气质**：表情必须与整体气质一致——慵懒配半垂眼帘，清冷配淡然目光，热烈配明亮眼神，甜美配弯弯笑眼\n"
+    "- **景别**：大特写/特写/近景/中近景/中景/中全景/全景。景别应随方案的视觉焦点灵活变化\n\n"
+    "### scene（场景环境）\n"
+    "- **具体地点**：可识别的空间类型\n"
+    "- **环境细节**：空间中的关键视觉元素\n"
+    "- **光线氛围**：基于物理光源的光线质感\n"
+    "- **道具**：人物可互动的环境物件，若不需要可省略\n"
+    "- **色调**：场景的整体色彩倾向\n"
+    "- **时间段与季节**：暗示时间与季节的光线特征和环境线索。服装与场景的季节必须一致\n\n"
     "## 设计原则\n\n"
-    "### 概念一致性（最重要）\n\n"
-    "每条方案必须有一个统一的视觉概念。服装、外观造型、动作、场景不是四个独立的选择，而是围绕同一个主题展开的整体。\n\n"
-    "好的例子：主题\"午后慵懒\"→ 丝质睡袍 + 散落长发 + 靠在窗边 + 卧室晨光\n"
-    "坏的例子：丝质睡袍 + 利落盘发 + 站在山顶 + 体育馆灯光\n\n"
-    "常见的不一致模式，务必避免：\n"
-    "- 服装正式但场景休闲（如西装+海滩）\n"
-    "- 动作活泼但氛围沉静（如跳跃+图书馆）\n"
-    "- 服装季节与场景季节矛盾（如薄纱+雪景）\n"
-    "- 服装风格与姿态气质冲突（如朋克装+乖巧站姿）\n"
-    "- 服装色彩与场景色调冲突（如鲜红裙子+冷蓝冰面场景，暖橘色穿搭+冷灰工业风室内）\n\n"
-    "### 展示角色魅力\n\n"
-    "角色是一位身材丰满的少女，设计应充分利用这一特质来展现角色的视觉魅力。展现魅力的方式是多元的：\n\n"
-    "- **身材魅力的展现**：修身剪裁直接展现曲线是常见手法，宽松穿搭通过偶尔的贴合或动作间的闪现同样能制造视觉张力。穿着状态应描述服装与身材的互动（修身服装的面料张力与贴合轮廓，宽松服装的悬垂与偶尔贴合），姿态设计应考虑如何自然地展现身体曲线（如侧身站立的S形曲线、坐姿时腰臀的弧度）\n"
-    "- **表情与气质的魅力**：眼神的方向和力度（直视镜头的自信、垂眸的温柔、回眸的惊艳）、嘴角的弧度（微笑、淡然、微启）、整体气质氛围（慵懒、清冷、热烈、甜美）都是展现角色魅力的重要手段，不应被身材展示完全占据\n"
-    "- **互动中的魅力**：人物与场景的互动方式本身就是魅力展现——轻撩头发的随性、指尖触碰花瓣的细腻、倚靠栏杆时的放松、回眸一瞥的惊艳，这些动态瞬间往往比静态展示更有感染力\n"
-    "- 以上所有描述必须始终是视觉化的、写实的，而非色情化的\n\n"
-    "### 姿态-场景互动\n\n"
-    "人物不应只是\"站在场景中\"，而应与场景产生有意义的互动。姿态设计必须考虑场景提供的互动可能：\n\n"
-    "- 倚靠类：靠墙、扶栏杆、倚窗\n"
-    "- 触碰类：触摸花朵、拨弄水面、轻抚布帘\n"
-    "- 融入类：坐在台阶上、躺在草地上、蹲在花丛间\n"
-    "- 穿行类：走过走廊、穿过树荫、踏上石阶\n\n"
-    "好的例子：场景\"落地窗前的白色窗台\"→ 姿态\"侧坐在窗台上，一只腿自然垂下，背靠窗框\"\n"
-    "坏的例子：场景\"落地窗前的白色窗台\"→ 姿态\"直立站在画面中央\"（毫无互动）\n\n"
-    "### 风格差异化\n\n"
-    "每条方案之间必须在以下维度上产生明显差异：\n"
-    "- **服装风格**：甜美 / 优雅 / 运动 / 街头 / 复古 / 性感 / 清纯 / 酷飒 等\n"
-    "- **场景类型**：居家 / 户外 / 都市 / 自然 / 商业空间 / 文化空间 等\n"
-    "- **情绪氛围**：温暖 / 清冷 / 热烈 / 梦幻 / 慵懒 / 活力 / 神秘 等\n"
-    "- **视觉主题**：慵懒 / 活力 / 神秘 / 甜美 / 优雅 / 酷飒 / 清新 / 烈艳 等\n\n"
-    "确保任意两条方案在至少两个维度上不重叠。\n\n"
-    "### 结构多样性\n\n"
-    "风格标签的差异不足以保证画面的真正多样化。即使风格标签不同，设计方案仍可能在结构层面高度相似（如都是修身裙+侧身站姿+暖色室内光）。请在风格差异的基础上，额外确保以下结构层面的多样性：\n\n"
-    "- **轮廓多样性**：不要所有方案都是修身剪裁。宽松、A字、蓬松、不对称、层叠等轮廓都应出现\n"
-    "- **姿态多样性**：不要所有方案都是侧身站姿。坐姿、蹲姿、行走中、倚靠、躺卧、回眸等姿态都应考虑\n"
-    "- **互动方式多样性**：不要所有方案都是同一类互动。倚靠、触碰、融入、穿行应交替出现\n"
-    "- **光线多样性**：不要所有方案都是暖色柔光。冷光、逆光、侧光、自然光、霓虹光、烛光等应有所变化\n"
-    "- **景别多样性**：景别应随方案视觉焦点灵活变化，近景/特写适合突出表情与上半身，中景/全景适合展示服装与全身姿态\n\n"
-    "### 物理可行性\n\n"
+    "### 单品必要性原则\n"
+    "每件单品都必须有明确的风格理由——它属于该风格的必要组成部分，而非为了\"丰富层次\"\"制造对比\"\"拉开差异\"而添加的冗余品。"
+    "如果去掉某件单品后穿搭依然完整且风格纯度更高，则该单品不应存在。\n\n"
+    "### 材质服务于风格统一\n"
+    "材质搭配应服务于风格统一性，而非追求对比。材质之间的自然差异（如缎面裙的哑光×丝质内衬的微妙光泽）是良好设计的副产品，不是设计目标。"
+    "禁止为了制造材质对比而引入风格冲突的单品（如丝绸旗袍配牛仔布、甜美蕾丝裙配硬质皮革）。\n\n"
+    "### 风格纯度\n"
+    "该风格本身是否已是完整服装类型（即风格名描述的服装本身就是完整造型，如旗袍、女仆装、水手服等）？"
+    "若是，则该服装类型本身就是完整造型——禁止添加任何外搭/外套/开衫。"
+    "外搭/外套仅在风格本身天然需要叠穿层次时才可保留（如学院风、森女风、法式风等）。\n\n"
+    "### 展示角色魅力\n"
+    "角色是一位身材丰满的少女。展现魅力的方式多元：\n"
+    "- 修身剪裁直接展现曲线是常见手法，宽松穿搭通过偶尔的贴合或动作间的闪现同样能制造视觉张力\n"
+    "- 表情与气质的魅力（眼神方向、嘴角弧度、整体气质氛围）是重要手段，不应被身材展示完全占据\n"
+    "- 人物与场景的互动方式本身就是魅力展现——轻撩头发、指尖触碰花瓣、倚靠栏杆、回眸一瞥\n"
+    "- 所有描述必须始终是视觉化的、写实的，而非色情化的。胸部描写优先使用\"胸部\"，禁止使用\"乳\"等露骨词汇\n\n"
+    "### 物理可行性\n"
     "- 人物只有两只手和两条腿，姿势描述不能出现肢体矛盾\n"
     "- 服装穿着状态必须符合物理规律（如扣子不可能同时扣着又敞开）\n"
-    "- 场景中的互动必须合理（如不可能同时靠墙又坐在椅子上）\n"
+    "- 场景中的互动必须合理\n"
     "- 头发和服装的动态必须符合重力与风力（如室内无风时头发不应飘起）\n"
-    "- 服装与场景的季节必须一致（如夏日场景不穿厚大衣，冬日场景不穿薄纱短裙）\n\n"
-    "### 细节具体化\n\n"
-    "用具体的、可视觉化的描述替代笼统的形容词。以下示例展示了\"具体\"的标准：\n\n"
-    "- ❌ \"白丝\" → ✅ \"20D超薄白色丝袜，纯色无花纹，及大腿根部，顶端3cm蕾丝花边腰封，防滑硅胶条固定\"\n"
-    "- ❌ \"高跟鞋\" → ✅ \"黑色漆皮尖头细跟鞋，10cm细跟，脚背一条细带交叉系至脚踝，银色方扣点缀\"\n"
-    "- ❌ \"漂亮的裙子\" → ✅ \"奶白色方领泡泡袖短款A字连衣裙，棉质面料微带光泽，裙摆自然展开至膝上15cm，腰间系薄荷绿缎带蝴蝶结\"\n"
-    "- ❌ \"好看的姿势\" → ✅ \"侧身而立，重心落在右腿，左腿微屈前伸，左手叉腰使腰线收紧，右手将一缕碎发别至耳后，面部侧转45度朝向镜头\"\n"
-    "- ❌ \"美丽的场景\" → ✅ \"落地窗前的白色窗台，午后阳光斜射入内，窗台上散落几本翻开的杂志，浅灰色纱帘被微风轻轻吹起\"\n"
-    "- ❌ \"戴了项链\" → ✅ \"锁骨间一条18K玫瑰金细链，链身约2mm，悬挂一颗5mm水滴形粉色碧玺吊坠\"\n"
-    "- ❌ \"蕾丝手套\" → ✅ \"白色蕾丝及肘长手套，指尖封闭，手背处蕾丝花纹为藤蔓缠枝纹，腕部一圈0.5cm珍珠串饰\"\n"
-    "- ❌ \"披肩发\" → ✅ \"黑色长直发自然披散在肩上，几缕碎发垂在耳侧\"\n"
-    "- ❌ \"裙子飘动\" → ✅ \"行走间丝质裙摆随步伐轻轻摇曳，在膝弯处形成柔软的褶皱\"\n\n"
-    "## 设计流程建议\n\n"
-    "1. **确定视觉主题**：先为每条方案确定一个核心视觉主题（如\"午后慵懒\"\"都市夜色\"\"田园清新\"），确保主题之间有足够差异\n"
-    "2. **构思整体画面**：围绕主题想象一个完整的画面——人物什么发型、穿着什么、做着什么、在什么场景中、氛围如何。确保服装/外观/姿态/场景四者在画面中自然融合\n"
-    "3. **展开细节设计**：从整体画面出发，逐个字段展开具体细节。先写clothing确定造型，再写appearance确定发型，然后写pose确定姿态，最后写scene确定环境与光线\n"
-    "4. **回查一致性**：写完后检查四个字段是否围绕同一主题、是否存在不一致模式、是否达到了细节具体化标准\n\n"
+    "- 服装与场景的季节必须一致\n\n"
+    "### 细节具体化\n"
+    "用具体的、可视觉化的描述替代笼统的形容词。示例：\n"
+    "- ❌ \"白丝\" → ✅ \"20D超薄白色丝袜，纯色无花纹，及大腿根部，顶端3cm蕾丝花边腰封\"\n"
+    "- ❌ \"高跟鞋\" → ✅ \"黑色漆皮尖头细跟鞋，10cm细跟，脚背一条细带交叉系至脚踝\"\n"
+    "- ❌ \"漂亮的裙子\" → ✅ \"奶白色方领泡泡袖短款A字连衣裙，棉质面料微带光泽，裙摆自然展开至膝上15cm\"\n"
+    "- ❌ \"戴了项链\" → ✅ \"锁骨间一条18K玫瑰金细链，链身约2mm，悬挂5mm水滴形粉色碧玺吊坠\"\n\n"
+    "## 设计自查\n\n"
+    "完成每套方案设计后，从以下维度审视并调整后再输出：\n"
+    "1. **风格纯度**：每件单品是否与风格存在美学冲突？是否添加了风格外的外套/单品？\n"
+    "2. **层次**：是否有单品仅为了凑层次而存在？\n"
+    "3. **焦点**：视觉焦点是否明确？是否有多余单品在争夺注意力？\n"
+    "4. **配色**：主色是否超过3个？点缀色是否杂乱而非点睛？\n"
+    "5. **材质**：是否有材质因追求对比而引入风格冲突？\n"
+    "6. **单品必要性**：去掉某件单品后穿搭是否依然完整？若是则该单品不应存在\n\n"
+    "## 禁止\n"
+    "- 禁止在任何字段中出现体型修正性语言（\"显瘦\"\"修饰XX部位\"\"拉长腿部\"等）。设计应基于风格美学，而非体型修正逻辑\n"
+    "- 禁止描述任何妆容（无论风格如何）\n"
+    "- 禁止描述任何文字、标识、水印、Logo\n"
+    "- 禁止描述被遮挡、肉眼不可见的隐藏细节（如封闭式鞋袜下描述趾甲油、长裙下描述大腿纹身）\n\n"
     "## 输出约束\n\n"
     "- 只返回 JSON 数组，不要返回任何其他文字\n"
-    "- 每条方案的四个字段都必须充分展开，不允许出现空字段或一句话概括\n"
+    "- 每条方案的四个字段都必须充分展开\n"
     "- 服装的穿着状态是营造视觉魅力的关键手段，务必重视\n"
-    "- 若方案包含袜类或鞋类，则必须具体描述，不允许省略或一笔带过；若为裸足或光腿则明确写出\n"
     "- 发型是完整视觉造型的核心部分，每条方案都必须具体描述\n"
     "- 所有可见细节都必须达到上述\"细节具体化\"示例的标准"
+)
+
+_COSTUME_REVIEWER_SYSTEM_PROMPT = (
+    "你是资深服饰美学审查师，核心职责是基于目标风格的经典美学范式，对已有的穿搭方案做美学维度的审查与优化，提升方案的风格完成度与视觉美感。\n\n"
+    "你的评判唯一基准是目标风格体系内的高阶审美标准，不做实用性、性价比、人群适配性等非美学维度的判断。所有修改必须服务于美感提升，而非单纯做出差异。\n\n"
+    "审查重点在服装设计（clothing 字段），外观造型/姿态/场景为辅。每套方案独立审查，互不影响。\n\n"
+    "## 输入\n\n"
+    "你会收到一个 JSON 数组，每个元素包含：\n"
+    "- style：目标风格名\n"
+    "- scene：目标场景描述\n"
+    "- design：设计方案对象，包含 clothing / appearance / pose / scene 四个字段\n\n"
+    "### 前置锚定步骤\n\n"
+    "对每套方案，正式审查前先明确该风格的核心美学特征、标志性配色、典型材质、经典廓形与搭配逻辑，以此作为该套审查的唯一基准。\n\n"
+    "## 审查维度（逐项校验，判断是否存在可优化的美学空间）\n\n"
+    "### 1. 风格纯度（最重要）\n"
+    "- 每件单品是否匹配该风格的美学体系，是否存在风格违和、错配的单品\n"
+    "- 整体风格表达是否清晰统一，是否存在无关元素稀释风格辨识度\n"
+    "- 该风格本身是否已是完整服装类型（如旗袍、女仆装、水手服等）？若是则禁止添加任何外搭/外套/开衫\n"
+    "- 是否添加了风格外的单品为凑层次或制造对比？\n\n"
+    "### 2. 色彩和谐\n"
+    "- 配色是否具备明确的主次层级（主色+辅色+点缀色），主色是否超过3个\n"
+    "- 色彩关系是否和谐（同色系层次、邻近色协调、对比色平衡）\n"
+    "- 是否存在突兀撞色破坏整体感，或色彩过于单调缺乏视觉层次\n"
+    "- 配色是否符合该风格的标志性色彩特征\n\n"
+    "### 3. 材质对话\n"
+    "- 材质组合是否有明确的美学意图：硬挺/柔软、光泽/哑光、厚重/轻盈的对比或呼应\n"
+    "- 是否存在为制造对比而引入风格冲突的面料组合（如丝绸旗袍配牛仔布、甜美蕾丝配硬质皮革）\n"
+    "- 丝袜禁止天鹅绒材质\n\n"
+    "### 4. 廓形比例\n"
+    "- 上下装廓形对比是否合理（松紧、长短、宽窄的搭配逻辑）\n"
+    "- 整体比例是否符合该风格的标志性轮廓特征\n"
+    "- 叠搭层次是否清晰有序，是否存在臃肿杂乱或过于单薄的问题\n\n"
+    "### 5. 视觉焦点与节奏\n"
+    "- 整体造型是否有且仅有1个核心视觉焦点，其余单品均为配角衬托\n"
+    "- 是否存在多余元素喧宾夺主，分散视觉重心\n\n"
+    "### 6. 单品必要性\n"
+    "- 每件单品是否都具备风格表达上的作用，是否存在为叠搭而硬加的冗余单品\n"
+    "- 移除冗余单品后，整体造型是否更纯粹、美感更强\n\n"
+    "## 决策原则（优先级从高到低）\n\n"
+    "0. **硬约束一票否决**：若方案违反以下任一约束，必须修改——面部未完整露出 / 发型未留刘海覆盖额头 / 出现高马尾 / 出现眼镜 / 出现妆容 / 出现体型修正性语言（\"显瘦\"\"修饰\"等）/ 出现文字水印描述 / 描述了肉眼不可见的隐藏细节\n"
+    "1. **风格一致性优先**：所有修改必须严格贴合目标风格的美学体系，不得偏移到其他风格\n"
+    "2. **保留亮点**：保留原方案中已有的优质设计，仅修改存在美学提升空间的部分\n"
+    "3. **实质提升**：改进后的方案必须具备可感知的美学提升，无实质提升则不修改\n"
+    "4. **宁缺毋滥**：若原方案已达到该风格的高阶美学水准、无明显优化空间，直接通过审查，禁止为改而改\n\n"
+    "## 输出格式\n\n"
+    "严格返回 JSON 数组（与输入顺序一一对应），每个元素包含：\n"
+    "- approved: boolean，审查结果。原方案无需修改则为 true，需要优化则为 false\n"
+    "- issues: 字符串数组，列出所有可提升点。每条需明确「审查维度+具体问题+美学影响」。审查通过时为空数组\n"
+    "- improved_payload: 对象或 null，优化后的完整设计方案（必须包含 clothing/appearance/pose/scene 四个字段，字段结构完全对应原方案，仅修改内容不增删字段）。审查通过时为 null\n\n"
+    "## 输出强制规则\n\n"
+    "1. 只输出纯 JSON 数组，不得添加任何前缀、后缀、解释说明、代码块标记\n"
+    "2. 所有内容使用中文表述\n"
+    "3. improved_payload 的字段名、数据结构必须与输入的 design 完全对应，不得增减任何顶层或子级字段\n"
+    "4. 数组长度必须与输入严格一致\n"
+    "5. 禁止出现任何体型修正类表述，所有判断与修改仅围绕风格美学本身展开"
 )
 
 _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT = (
@@ -821,20 +843,16 @@ class DailySelfieService:
             logger.error("[DailySelfie] 无法获取默认 LLM Provider，跳过人格 %s", persona_name)
             return 0, 0
 
-        persona_system_prompt = self._get_persona_system_prompt(persona_name)
-        if not persona_system_prompt:
-            logger.warning("[DailySelfie] 人格 %s 未找到 system prompt，使用空人格上下文", persona_name)
-
-        styles_task = self._llm_round1(chat_provider_id, persona_system_prompt, remaining, style_pool, recent_styles)
+        styles_task = self._select_styles_by_algorithm(remaining, style_pool, recent_styles)
         scenes_task = self._llm_round2_scene(chat_provider_id, remaining)
 
         styles, scenes = await asyncio.gather(styles_task, scenes_task)
 
         if not styles:
-            logger.warning("[DailySelfie] 人格 %s 第1轮(风格)未返回结果", persona_name)
+            logger.warning("[DailySelfie] 人格 %s r0算法选风格未返回结果", persona_name)
             return 0, 0
         if not scenes:
-            logger.warning("[DailySelfie] 人格 %s 第2轮(场景)未返回结果", persona_name)
+            logger.warning("[DailySelfie] 人格 %s 第1轮(场景)未返回结果", persona_name)
             return 0, 0
 
         pair_count = min(len(styles), len(scenes))
@@ -842,7 +860,7 @@ class DailySelfieService:
         scenes = scenes[:pair_count]
 
         logger.info(
-            "[DailySelfie] 人格 %s 第1轮返回 %d 条风格，第2轮返回 %d 条场景，配对 %d 组",
+            "[DailySelfie] 人格 %s r0算法选风格返回 %d 条，第1轮返回 %d 条场景，配对 %d 组",
             persona_name, len(styles), len(scenes), pair_count,
         )
 
@@ -906,7 +924,7 @@ class DailySelfieService:
             non_empty_refs = [d for d in batch_refs_desc if d]
 
             logger.info(
-                "[DailySelfie] 人格 %s 第3轮批次 %d/%d：创意设计 %d 组",
+                "[DailySelfie] 人格 %s 第2轮批次 %d/%d：创意设计 %d 组",
                 persona_name, batch_num, total_batches, len(batch_styles),
             )
 
@@ -918,10 +936,15 @@ class DailySelfieService:
 
             if designs is None:
                 logger.warning(
-                    "[DailySelfie] 人格 %s 第3轮批次 %d/%d 创意设计失败，跳过",
+                    "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，跳过",
                     persona_name, batch_num, total_batches,
                 )
                 continue
+
+            # r3: 审核环节，对设计师输出做美学审核并可能给出改进版
+            designs = await self._llm_round3_review(
+                chat_provider_id, batch_styles, batch_scenes, designs,
+            )
 
             actual_count = min(len(designs), len(batch_styles))
             for i in range(actual_count):
@@ -1360,90 +1383,56 @@ class DailySelfieService:
             img = img.resize((int(w * ratio), int(h * ratio)), PILImage.LANCZOS)
         img.save(dst, format="JPEG", quality=quality)
 
-    async def _llm_round1(
+    async def _select_styles_by_algorithm(
         self,
-        chat_provider_id: str,
-        persona_system_prompt: str,
-        remaining: int,
+        count: int,
         style_pool: list[str],
         recent_styles: list[str],
     ) -> list[str]:
-        style_pool_text = "、".join(style_pool) if style_pool else "无可用风格"
-        recent_text = "、".join(recent_styles) if recent_styles else "无"
+        """r0: 算法选择风格（近期去重+加权随机）。
 
-        task_system = _TASK_MODE_SYSTEM_PROMPT.format(count=remaining)
-        system_prompt = f"{persona_system_prompt}\n\n{task_system}" if persona_system_prompt else task_system
+        策略：
+        1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"
+        2. 若新鲜池 >= count，从新鲜池中加权随机抽 count 个
+           - 加权：无历史信息的风格权重 1.0（鼓励覆盖未拍过的）
+        3. 若新鲜池 < count 但 >=1，从新鲜池全取，不足部分从近期池中补足
+        4. 若新鲜池为空，从全部风格池中随机抽 count 个（允许与近期重复）
+        """
+        if not style_pool or count <= 0:
+            return []
 
-        user_prompt = _ROUND1_USER_PROMPT.format(
-            remaining=remaining,
-            style_pool=style_pool_text,
-            recent_styles=recent_text,
+        recent_set = set(recent_styles)
+        fresh_pool = [s for s in style_pool if s not in recent_set]
+        recent_pool = [s for s in style_pool if s in recent_set]
+
+        if fresh_pool and len(fresh_pool) >= count:
+            picked = self._weighted_sample(fresh_pool, count)
+        elif fresh_pool:
+            picked = list(fresh_pool)
+            need = count - len(picked)
+            if need > 0 and recent_pool:
+                picked.extend(self._weighted_sample(recent_pool, min(need, len(recent_pool))))
+        else:
+            picked = self._weighted_sample(style_pool, min(count, len(style_pool)))
+
+        picked = picked[:count]
+        logger.info(
+            "[DailySelfie] r0算法选风格: pool=%d recent=%d fresh=%d picked=%s",
+            len(style_pool), len(recent_set), len(fresh_pool), picked,
         )
+        return picked
 
-        if self._is_debug():
-            logger.info(
-                "[DailySelfie][DEBUG][Round1] chat_provider_id=%s\n"
-                "=== system_prompt ===\n%s\n"
-                "=== user_prompt ===\n%s",
-                chat_provider_id, system_prompt, user_prompt,
-            )
-
-        # 重试一次：超时/异常/返回空/返回条数不足均重试
-        for attempt in range(2):
-            try:
-                resp = await asyncio.wait_for(
-                    self.plugin.context.llm_generate(
-                        chat_provider_id=chat_provider_id,
-                        prompt=user_prompt,
-                        system_prompt=system_prompt,
-                    ),
-                    timeout=360,
-                )
-                text = (getattr(resp, "completion_text", "") or "").strip()
-                if not text:
-                    tool_names = getattr(resp, "tools_call_name", None) or []
-                    logger.warning(
-                        "[DailySelfie] LLM第1轮返回空文本(第%d次) role=%s tool_calls=%s result_chain=%s",
-                        attempt + 1, getattr(resp, "role", "?"),
-                        tool_names, bool(getattr(resp, "result_chain", None)),
-                    )
-                    if attempt == 0:
-                        logger.info("[DailySelfie] LLM第1轮返回空，重试一次")
-                        continue
-                    return []
-
-                if self._is_debug():
-                    logger.info(
-                        "[DailySelfie][DEBUG][Round1] === LLM response ===\n%s",
-                        text,
-                    )
-
-                parsed = _parse_llm_lines(text, remaining)
-                if len(parsed) < remaining and attempt == 0:
-                    logger.warning(
-                        "[DailySelfie] LLM第1轮返回 %d 条（期望 %d 条），重试一次",
-                        len(parsed), remaining,
-                    )
-                    continue
-                if len(parsed) < remaining:
-                    logger.warning(
-                        "[DailySelfie] LLM第1轮重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
-                        len(parsed), remaining,
-                    )
-                return parsed
-            except asyncio.TimeoutError:
-                logger.error("[DailySelfie] LLM第1轮调用超时(360s)(第%d次)", attempt + 1)
-                if attempt == 0:
-                    logger.info("[DailySelfie] LLM第1轮超时，重试一次")
-                    continue
-                return []
-            except Exception as e:
-                logger.error("[DailySelfie] LLM第1轮调用失败(第%d次): %s", attempt + 1, e)
-                if attempt == 0:
-                    logger.info("[DailySelfie] LLM第1轮异常，重试一次")
-                    continue
-                return []
-        return []
+    @staticmethod
+    def _weighted_sample(pool: list[str], k: int) -> list[str]:
+        """从 pool 中随机抽取 k 个不重复元素（无权重配置时的等概率抽样）。"""
+        if not pool or k <= 0:
+            return []
+        k = min(k, len(pool))
+        try:
+            return random.sample(pool, k)
+        except Exception as e:
+            logger.warning("[DailySelfie] 加权抽样失败，回退到普通抽样: %s", e)
+            return random.sample(pool, min(k, len(pool)))
 
     async def _llm_round2_scene(
         self,
@@ -1455,7 +1444,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round2-Scene] chat_provider_id=%s\n"
+                "[DailySelfie][DEBUG][Round1-Scene] chat_provider_id=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 chat_provider_id, system_prompt, user_prompt,
@@ -1474,41 +1463,41 @@ class DailySelfieService:
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
-                    logger.warning("[DailySelfie] LLM第2轮(场景)返回空文本(第%d次)", attempt + 1)
+                    logger.warning("[DailySelfie] LLM第1轮(场景)返回空文本(第%d次)", attempt + 1)
                     if attempt == 0:
-                        logger.info("[DailySelfie] LLM第2轮(场景)返回空，重试一次")
+                        logger.info("[DailySelfie] LLM第1轮(场景)返回空，重试一次")
                         continue
                     return []
 
                 if self._is_debug():
                     logger.info(
-                        "[DailySelfie][DEBUG][Round2-Scene] === LLM response ===\n%s",
+                        "[DailySelfie][DEBUG][Round1-Scene] === LLM response ===\n%s",
                         text,
                     )
 
                 parsed = _parse_llm_lines(text, count)
                 if len(parsed) < count and attempt == 0:
                     logger.warning(
-                        "[DailySelfie] LLM第2轮(场景)返回 %d 条（期望 %d 条），重试一次",
+                        "[DailySelfie] LLM第1轮(场景)返回 %d 条（期望 %d 条），重试一次",
                         len(parsed), count,
                     )
                     continue
                 if len(parsed) < count:
                     logger.warning(
-                        "[DailySelfie] LLM第2轮(场景)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        "[DailySelfie] LLM第1轮(场景)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
                         len(parsed), count,
                     )
                 return parsed
             except asyncio.TimeoutError:
-                logger.error("[DailySelfie] LLM第2轮(场景)调用超时(360s)(第%d次)", attempt + 1)
+                logger.error("[DailySelfie] LLM第1轮(场景)调用超时(360s)(第%d次)", attempt + 1)
                 if attempt == 0:
-                    logger.info("[DailySelfie] LLM第2轮(场景)超时，重试一次")
+                    logger.info("[DailySelfie] LLM第1轮(场景)超时，重试一次")
                     continue
                 return []
             except Exception as e:
-                logger.error("[DailySelfie] LLM第2轮(场景)调用失败(第%d次): %s", attempt + 1, e)
+                logger.error("[DailySelfie] LLM第1轮(场景)调用失败(第%d次): %s", attempt + 1, e)
                 if attempt == 0:
-                    logger.info("[DailySelfie] LLM第2轮(场景)异常，重试一次")
+                    logger.info("[DailySelfie] LLM第1轮(场景)异常，重试一次")
                     continue
                 return []
         return []
@@ -1539,7 +1528,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round3-Design] provider=%s\n"
+                "[DailySelfie][DEBUG][Round2-Design] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 costume_provider_id, effective_prompt, user_prompt,
@@ -1558,14 +1547,14 @@ class DailySelfieService:
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
-                        "[DailySelfie] 第3轮(创意设计)返回空文本(第%d次)",
+                        "[DailySelfie] 第2轮(创意设计)返回空文本(第%d次)",
                         attempt + 1,
                     )
                     continue
 
                 if self._is_debug():
                     logger.info(
-                        "[DailySelfie][DEBUG][Round3-Design] === response ===\n%s",
+                        "[DailySelfie][DEBUG][Round2-Design] === response ===\n%s",
                         text,
                     )
 
@@ -1573,15 +1562,180 @@ class DailySelfieService:
                 if designs is not None:
                     return designs
                 logger.warning(
-                    "[DailySelfie] 第3轮(创意设计) JSON 解析失败(第%d次)，原始文本: %s",
+                    "[DailySelfie] 第2轮(创意设计) JSON 解析失败(第%d次)，原始文本: %s",
                     attempt + 1, text[:200],
                 )
             except asyncio.TimeoutError:
-                logger.warning("[DailySelfie] 第3轮(创意设计)调用超时(第%d次)", attempt + 1)
+                logger.warning("[DailySelfie] 第2轮(创意设计)调用超时(第%d次)", attempt + 1)
             except Exception as e:
-                logger.warning("[DailySelfie] 第3轮(创意设计)调用失败(第%d次): %s", attempt + 1, e)
+                logger.warning("[DailySelfie] 第2轮(创意设计)调用失败(第%d次): %s", attempt + 1, e)
 
         return None
+
+    async def _llm_round3_review(
+        self,
+        chat_provider_id: str,
+        styles: list[str],
+        scenes: list[str],
+        designs: list[dict],
+        system_prompt: str = "",
+    ) -> list[dict]:
+        """r3: 审核师审核设计方案，可能返回改进版。
+
+        对每套设计：
+        - approved=true 或 improved_payload 为空 → 保留原设计
+        - approved=false 且 improved_payload 存在 → 用改进版替换
+
+        若整体审核调用失败，返回原 designs，不让流程中断。
+        """
+        if not designs:
+            return designs
+
+        input_data = []
+        for i, design in enumerate(designs):
+            style = styles[i] if i < len(styles) else ""
+            scene = scenes[i] if i < len(scenes) else ""
+            input_data.append({
+                "style": style,
+                "scene": scene,
+                "design": design,
+            })
+
+        user_prompt = (
+            f"请审查以下 {len(input_data)} 套穿搭方案：\n\n"
+            f"{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\n"
+            f"返回 {len(input_data)} 个审核结果的 JSON 数组。"
+        )
+
+        effective_prompt = system_prompt or _COSTUME_REVIEWER_SYSTEM_PROMPT
+
+        if self._is_debug():
+            logger.info(
+                "[DailySelfie][DEBUG][Round3-Review] provider=%s\n"
+                "=== system_prompt ===\n%s\n"
+                "=== user_prompt ===\n%s",
+                chat_provider_id, effective_prompt, user_prompt,
+            )
+
+        for attempt in range(2):
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=chat_provider_id,
+                        prompt=user_prompt,
+                        system_prompt=effective_prompt,
+                    ),
+                    timeout=360,
+                )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    logger.warning(
+                        "[DailySelfie] 第3轮(审核)返回空文本(第%d次)",
+                        attempt + 1,
+                    )
+                    continue
+
+                if self._is_debug():
+                    logger.info(
+                        "[DailySelfie][DEBUG][Round3-Review] === response ===\n%s",
+                        text,
+                    )
+
+                reviews = self._parse_reviewer_json(text, len(input_data))
+                if reviews is not None:
+                    return self._apply_reviews(designs, reviews)
+                logger.warning(
+                    "[DailySelfie] 第3轮(审核) JSON 解析失败(第%d次)，原始文本: %s",
+                    attempt + 1, text[:200],
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[DailySelfie] 第3轮(审核)调用超时(第%d次)", attempt + 1)
+            except Exception as e:
+                logger.warning("[DailySelfie] 第3轮(审核)调用失败(第%d次): %s", attempt + 1, e)
+
+        logger.warning("[DailySelfie] r3审核整体失败，返回原始设计方案")
+        return designs
+
+    @staticmethod
+    def _parse_reviewer_json(text: str, expected_count: int) -> list[dict] | None:
+        """解析审核师输出的 JSON 数组。"""
+        text = text.strip()
+        if text.startswith("```"):
+            first_newline = text.index("\n") if "\n" in text else -1
+            if first_newline >= 0:
+                text = text[first_newline + 1:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            json_match = re.search(r'\[.*\]', text, re.DOTALL)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    return None
+            else:
+                return None
+
+        if not isinstance(result, list):
+            return None
+
+        valid: list[dict] = []
+        for item in result:
+            if isinstance(item, dict):
+                approved = bool(item.get("approved", True))
+                improved = item.get("improved_payload")
+                issues = item.get("issues", []) or []
+                if not isinstance(issues, list):
+                    issues = [str(issues)] if issues else []
+                valid.append({
+                    "approved": approved,
+                    "issues": issues,
+                    "improved_payload": improved if isinstance(improved, dict) else None,
+                })
+
+        if len(valid) < expected_count:
+            logger.warning(
+                "[DailySelfie] 审核师返回 %d 条结果，期望 %d 条",
+                len(valid), expected_count,
+            )
+
+        return valid if valid else None
+
+    @staticmethod
+    def _apply_reviews(designs: list[dict], reviews: list[dict]) -> list[dict]:
+        """根据审核结果生成最终设计方案。"""
+        final: list[dict] = []
+        for i, design in enumerate(designs):
+            review = reviews[i] if i < len(reviews) else None
+            if not review:
+                final.append(design)
+                continue
+
+            approved = review.get("approved", True)
+            improved = review.get("improved_payload")
+            issues = review.get("issues", [])
+
+            if approved or not improved:
+                if not approved and issues:
+                    logger.info(
+                        "[DailySelfie] 设计 %d 审核未通过但无改进版，保留原设计。issues: %s",
+                        i, issues,
+                    )
+                else:
+                    logger.info("[DailySelfie] 设计 %d 审核通过", i)
+                final.append(design)
+            else:
+                logger.info(
+                    "[DailySelfie] 设计 %d 审核未通过，应用改进版。issues: %s",
+                    i, issues,
+                )
+                final.append(improved)
+
+        return final
 
     async def _llm_round4_prompt(
         self,
