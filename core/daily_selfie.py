@@ -789,6 +789,18 @@ class DailySelfieService:
             return configured
         return _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
 
+    def _get_reviewer_system_prompt(self, persona: dict) -> str:
+        """读取人格级审核师系统提示词，留空则回退到内置默认常量。
+
+        与设计师/提示词工程师保持一致的配置模式：每个 persona 可独立定制审核尺度，
+        例如某个角色对发型的硬约束更严格、或某个角色希望审核更激进/保守。
+        """
+        persona_conf = persona.get("config", {})
+        configured = str(persona_conf.get("reviewer_system_prompt", "") or "").strip()
+        if configured:
+            return configured
+        return _COSTUME_REVIEWER_SYSTEM_PROMPT
+
     @staticmethod
     def _parse_costume_designer_json(text: str, expected_count: int) -> list[dict] | None:
         text = text.strip()
@@ -921,6 +933,7 @@ class DailySelfieService:
 
         costume_system_prompt = self._get_costume_designer_system_prompt(persona)
         prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona)
+        reviewer_system_prompt = self._get_reviewer_system_prompt(persona)
 
         batch_size = 3
         all_designs: list[dict] = []
@@ -957,6 +970,7 @@ class DailySelfieService:
             # r3: 审核环节，对设计师输出做美学审核并可能给出改进版
             designs = await self._llm_round3_review(
                 reviewer_provider_id, batch_styles, batch_scenes, designs,
+                system_prompt=reviewer_system_prompt,
             )
 
             actual_count = min(len(designs), len(batch_styles))
@@ -1402,12 +1416,12 @@ class DailySelfieService:
         style_pool: list[str],
         recent_styles: list[str],
     ) -> list[str]:
-        """r0: 算法选择风格（近期去重+加权随机）。
+        """r0: 算法选择风格（近期去重+等概率随机）。
 
         策略：
         1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"
-        2. 若新鲜池 >= count，从新鲜池中加权随机抽 count 个
-           - 加权：无历史信息的风格权重 1.0（鼓励覆盖未拍过的）
+        2. 若新鲜池 >= count，从新鲜池中等概率随机抽 count 个
+           - 当前实现为等概率抽样（random.sample），未来可扩展为按"上次拍摄时间"加权
         3. 若新鲜池 < count 但 >=1，从新鲜池全取，不足部分从近期池中补足
         4. 若新鲜池为空，从全部风格池中随机抽 count 个（允许与近期重复）
         """
@@ -1699,7 +1713,13 @@ class DailySelfieService:
         valid: list[dict] = []
         for item in result:
             if isinstance(item, dict):
-                approved = bool(item.get("approved", True))
+                # 兼容 LLM 返回字符串布尔值（如 "false"）的情况
+                # bool("false") 在 Python 中为 True，会导致审核结果反转，必须显式解析
+                approved_raw = item.get("approved", True)
+                if isinstance(approved_raw, str):
+                    approved = approved_raw.strip().lower() not in ("false", "0", "no", "null", "none", "")
+                else:
+                    approved = bool(approved_raw)
                 improved = item.get("improved_payload")
                 issues = item.get("issues", []) or []
                 if not isinstance(issues, list):
@@ -1746,8 +1766,11 @@ class DailySelfieService:
                     "[DailySelfie] 设计 %d 审核未通过，应用改进版。issues: %s",
                     i, issues,
                 )
-                # merge：审核师改进版可能只返回修改过的字段，未修改字段保留原设计
-                merged = {**design, **improved} if isinstance(design, dict) else improved
+                # merge：审核师改进版可能只返回修改过的字段，未修改字段保留原设计。
+                # 过滤掉 None 值，防止改进版中的 None 覆盖原设计的有效字段
+                # （LLM 可能偏离指令返回部分字段为 null，会导致下游 f-string 渲染成 "None"）
+                improved_clean = {k: v for k, v in improved.items() if v is not None}
+                merged = {**design, **improved_clean} if isinstance(design, dict) else improved_clean
                 final.append(merged)
 
         return final
@@ -1878,7 +1901,10 @@ class DailySelfieService:
                 return []
             if not hasattr(db, "list_images_lightweight"):
                 return []
-            three_days_ago = datetime.now() - timedelta(days=3)
+            # 按日期级别比较，避免时刻偏差导致3天前当天的图片被过滤掉
+            # （原实现用 datetime.now() 时刻 - 3 天，会少算一整天的图片）
+            today_date = datetime.now().date()
+            three_days_ago_date = today_date - timedelta(days=3)
             images = await db.list_images_lightweight(
                 persona="", exclude_persona="",
                 sort_by="created_at", limit=50,
@@ -1888,8 +1914,8 @@ class DailySelfieService:
                 created_raw = str(img.get("created_at", "") or "")[:10]
                 if created_raw:
                     try:
-                        created_dt = datetime.strptime(created_raw, _DATE_FMT)
-                        if created_dt < three_days_ago:
+                        created_dt = datetime.strptime(created_raw, _DATE_FMT).date()
+                        if created_dt < three_days_ago_date:
                             continue
                     except ValueError:
                         pass
