@@ -19,6 +19,15 @@ _DATE_FMT = "%Y-%m-%d"
 _NUMBER_PREFIX_RE = re.compile(r'^[\d]+[.、)\]】]\s*')
 _BULLET_PREFIX_RE = re.compile(r'^[-•*]\s+')
 
+# 创意设计失败后的延迟重试参数
+# 当 _llm_round2_design 整体返回 None 时，等待 DESIGN_RETRY_DELAY_SECONDS 后再试，
+# 最多重试 DESIGN_MAX_RETRY_ATTEMPTS 次；若预计重试开始时间已晚于当日 DESIGN_RETRY_DEADLINE
+# （默认 23:30），则直接终止重试——避免生图跨日导致额度计算错乱。
+DESIGN_RETRY_DELAY_SECONDS = 600  # 10 分钟
+DESIGN_MAX_RETRY_ATTEMPTS = 2
+DESIGN_RETRY_DEADLINE_HOUR = 23
+DESIGN_RETRY_DEADLINE_MINUTE = 30
+
 
 def _clean_llm_line(line: str) -> str:
     line = line.strip()
@@ -960,11 +969,55 @@ class DailySelfieService:
                 system_prompt=costume_system_prompt,
             )
 
-            if designs is None:
-                logger.warning(
-                    "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，跳过",
-                    persona_name, batch_num, total_batches,
+            # 设计失败后的延迟重试：每次等待 DESIGN_RETRY_DELAY_SECONDS 后再试，
+            # 最多 DESIGN_MAX_RETRY_ATTEMPTS 次；若预计重试开始时间已晚于当日
+            # 23:30，则直接终止重试（避免后续生图跨日导致额度计算错乱）。
+            retry_attempt = 0
+            while designs is None and retry_attempt < DESIGN_MAX_RETRY_ATTEMPTS:
+                now_dt = datetime.now()
+                estimated_start = now_dt + timedelta(seconds=DESIGN_RETRY_DELAY_SECONDS)
+                deadline_dt = now_dt.replace(
+                    hour=DESIGN_RETRY_DEADLINE_HOUR,
+                    minute=DESIGN_RETRY_DEADLINE_MINUTE,
+                    second=0,
+                    microsecond=0,
                 )
+                if estimated_start >= deadline_dt:
+                    logger.warning(
+                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，"
+                        "预计延迟重试开始时间 %s 已到/过当日截止线 %s，终止重试",
+                        persona_name, batch_num, total_batches,
+                        estimated_start.strftime("%H:%M:%S"),
+                        deadline_dt.strftime("%H:%M:%S"),
+                    )
+                    break
+
+                logger.warning(
+                    "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，"
+                    "%d 分钟后进行第 %d 次延迟重试（预计开始: %s）",
+                    persona_name, batch_num, total_batches,
+                    DESIGN_RETRY_DELAY_SECONDS // 60, retry_attempt + 1,
+                    estimated_start.strftime("%H:%M:%S"),
+                )
+                await asyncio.sleep(DESIGN_RETRY_DELAY_SECONDS)
+                retry_attempt += 1
+                designs = await self._llm_round2_design(
+                    designer_provider_id, batch_styles, batch_scenes,
+                    ref_descriptions=non_empty_refs if non_empty_refs else None,
+                    system_prompt=costume_system_prompt,
+                )
+
+            if designs is None:
+                if retry_attempt > 0:
+                    logger.warning(
+                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
+                        persona_name, batch_num, total_batches, retry_attempt,
+                    )
+                else:
+                    logger.warning(
+                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，跳过",
+                        persona_name, batch_num, total_batches,
+                    )
                 continue
 
             # r3: 审核环节，对设计师输出做美学审核并可能给出改进版
@@ -1569,7 +1622,7 @@ class DailySelfieService:
                         prompt=user_prompt,
                         system_prompt=effective_prompt,
                     ),
-                    timeout=360,
+                    timeout=600,
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
