@@ -13,6 +13,7 @@ Gitee AI 图像生成插件
 import asyncio
 import base64
 import io
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1192,6 +1193,72 @@ class GiteeAIImagePlugin(Star):
                     f"已用: {pv['used']}/{pv['limit']} | 剩余: {pv['remaining']} | "
                     f"⏰ {pv.get('schedule_time', '')}"
                 )
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("补拍debug")
+    async def daily_selfie_debug_command(self, event: AstrMessageEvent):
+        """查看补拍重要事件摘要（基于内存缓冲区，不读日志文件）。
+
+        用法:
+        - /补拍debug
+        """
+        if not hasattr(self, "daily_selfie") or not self.daily_selfie:
+            yield event.plain_result("补拍功能未启用。")
+            return
+        events = self.daily_selfie.get_debug_events()
+        if not events:
+            yield event.plain_result("📭 暂无补拍调试事件（缓冲区为空，可能尚未触发过补拍，或缓冲区已滚动）。")
+            return
+
+        # 统计摘要
+        success_total = 0
+        fail_total = 0
+        batch_count = 0
+        personas_started: list[str] = []
+        timeout_count = 0
+        retry_count = 0
+
+        for ev in events:
+            msg = ev["message"]
+            persona = ev.get("persona", "")
+            if "开始处理人格" in msg and persona and persona not in personas_started:
+                personas_started.append(persona)
+            if "第2轮批次" in msg and "创意设计" in msg:
+                batch_count += 1
+            if "调用超时" in msg:
+                timeout_count += 1
+            if "延迟重试" in msg and "进行第" in msg:
+                retry_count += 1
+            m = re.search(r"补画完成:\s*成功=(\d+)\s*失败=(\d+)", msg)
+            if m:
+                success_total += int(m.group(1))
+                fail_total += int(m.group(2))
+
+        lines: list[str] = []
+        lines.append("📅 补拍调试事件摘要")
+        lines.append("")
+        lines.append("📊 统计：")
+        lines.append(f"  触发人格数：{len(personas_started)}（{', '.join(personas_started) or '无'}）")
+        lines.append(f"  设计批次数：{batch_count}")
+        lines.append(f"  超时次数：{timeout_count}")
+        lines.append(f"  延迟重试次数：{retry_count}")
+        lines.append(f"  最终结果：成功={success_total} 失败={fail_total}")
+        lines.append("")
+        lines.append("📜 重要事件：")
+        for ev in events:
+            tag = ""
+            if ev["level"] == "WARN":
+                tag = "⚠️ "
+            elif ev["level"] == "ERROR":
+                tag = "❌ "
+            persona_tag = f"[{ev['persona']}] " if ev.get("persona") else ""
+            lines.append(f"  {ev['time']} {tag}{persona_tag}{ev['message']}")
+
+        # 控制单条消息长度，避免超长被截断
+        if len("\n".join(lines)) > 4000:
+            lines = lines[:80]
+            lines.append("  ...(事件过多已截断，如需完整列表请减少并发人格数或清空缓冲区)")
+
         yield event.plain_result("\n".join(lines))
 
     # ==================== 视频生成 ====================

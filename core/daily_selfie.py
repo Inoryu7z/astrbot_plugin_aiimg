@@ -8,6 +8,7 @@ import random
 import re
 import tempfile
 import uuid
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -450,6 +451,33 @@ class DailySelfieService:
         self._cron_task: Optional[asyncio.Task] = None
         self._selfie_tasks: dict[str, asyncio.Task] = {}
 
+        # 补拍调试事件内存缓冲区：供 /补拍debug 命令读取，避免依赖日志文件路径
+        # （Docker 环境下日志路径与本地不同，硬编码路径会失效）
+        # maxlen=300 保证内存占用可控，旧事件自动滚动淘汰
+        self._debug_events: deque = deque(maxlen=300)
+        self._debug_current_persona: str = ""
+
+    def _record_debug(self, level: str, message: str) -> None:
+        """记录一条补拍调试事件到内存缓冲区。
+
+        level: "INFO" / "WARN" / "ERROR"
+        message: 事件正文（不含 [DailySelfie] 前缀）
+        """
+        self._debug_events.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "level": level,
+            "persona": self._debug_current_persona,
+            "message": message,
+        })
+
+    def get_debug_events(self) -> list[dict]:
+        """返回当前缓冲区中所有调试事件（按时间顺序）。供 /补拍debug 命令调用。"""
+        return list(self._debug_events)
+
+    def clear_debug_events(self) -> None:
+        """清空调试事件缓冲区。"""
+        self._debug_events.clear()
+
     async def start(self):
         self._running = True
         self._cron_task = asyncio.create_task(self._cron_loop())
@@ -713,6 +741,12 @@ class DailySelfieService:
                 "[DailySelfie] 补画完成: 成功=%d 失败=%d",
                 total_success, total_fail,
             )
+            self._record_debug(
+                "INFO",
+                f"补画完成: 成功={total_success} 失败={total_fail}",
+            )
+            # 补画流程结束，清空当前人格上下文
+            self._debug_current_persona = ""
 
     def _get_persona_system_prompt(self, persona_name: str) -> str:
         try:
@@ -868,7 +902,18 @@ class DailySelfieService:
         success = 0
         fail = 0
 
-        logger.info("[DailySelfie] 开始处理人格 %s，总剩余额度 %d（%d个提供商）", persona_name, remaining, len(persona["providers"]))
+        provider_names = [pv.get("provider_id", "?") for pv in persona["providers"]]
+        self._debug_current_persona = persona_name
+        logger.info(
+            "[DailySelfie] 开始处理人格 %s，总剩余额度 %d（提供商: %s）",
+            persona_name,
+            remaining,
+            ", ".join(provider_names) if provider_names else "无",
+        )
+        self._record_debug(
+            "INFO",
+            f"开始处理人格 {persona_name}，总剩余额度 {remaining}（提供商: {', '.join(provider_names) if provider_names else '无'}）",
+        )
 
         chat_provider_id = self._get_chat_provider_id(umo)
         if not chat_provider_id:
@@ -917,7 +962,9 @@ class DailySelfieService:
             if ref is not None and i < pair_count:
                 ref_by_pair[i] = ref
 
-        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 组配对）", persona_name, len([r for r in ref_results if r is not None]), pair_count)
+        ref_found_count = len([r for r in ref_results if r is not None])
+        logger.info("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 组配对）", persona_name, ref_found_count, pair_count)
+        self._record_debug("INFO", f"搜图完成，找到 {ref_found_count} 张参考图（共 {pair_count} 组配对）")
 
         persona_ref_count = len(self.plugin._get_persona_config_selfie_reference_paths(persona_name))
         search_ref_index = persona_ref_count + 1
@@ -962,6 +1009,10 @@ class DailySelfieService:
                 "[DailySelfie] 人格 %s 第2轮批次 %d/%d：创意设计 %d 组",
                 persona_name, batch_num, total_batches, len(batch_styles),
             )
+            self._record_debug(
+                "INFO",
+                f"第2轮批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
+            )
 
             designs = await self._llm_round2_design(
                 designer_provider_id, batch_styles, batch_scenes,
@@ -990,6 +1041,12 @@ class DailySelfieService:
                         estimated_start.strftime("%H:%M:%S"),
                         deadline_dt.strftime("%H:%M:%S"),
                     )
+                    self._record_debug(
+                        "WARN",
+                        f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，"
+                        f"预计延迟重试开始时间 {estimated_start.strftime('%H:%M:%S')} "
+                        f"已到/过当日截止线 {deadline_dt.strftime('%H:%M:%S')}，终止重试",
+                    )
                     break
 
                 logger.warning(
@@ -998,6 +1055,12 @@ class DailySelfieService:
                     persona_name, batch_num, total_batches,
                     DESIGN_RETRY_DELAY_SECONDS // 60, retry_attempt + 1,
                     estimated_start.strftime("%H:%M:%S"),
+                )
+                self._record_debug(
+                    "WARN",
+                    f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，"
+                    f"{DESIGN_RETRY_DELAY_SECONDS // 60} 分钟后进行第 {retry_attempt + 1} 次延迟重试"
+                    f"（预计开始: {estimated_start.strftime('%H:%M:%S')}）",
                 )
                 await asyncio.sleep(DESIGN_RETRY_DELAY_SECONDS)
                 retry_attempt += 1
@@ -1013,10 +1076,18 @@ class DailySelfieService:
                         "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
                         persona_name, batch_num, total_batches, retry_attempt,
                     )
+                    self._record_debug(
+                        "WARN",
+                        f"第2轮批次 {batch_num}/{total_batches} 创意设计在 {retry_attempt} 次延迟重试后仍失败，跳过",
+                    )
                 else:
                     logger.warning(
                         "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，跳过",
                         persona_name, batch_num, total_batches,
+                    )
+                    self._record_debug(
+                        "WARN",
+                        f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，跳过",
                     )
                 continue
 
@@ -1098,6 +1169,7 @@ class DailySelfieService:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("[DailySelfie] 人格 %s 并发画图完成: tasks=%d results=%d", persona_name, len(tasks), len(results))
+        self._record_debug("INFO", f"并发画图完成: tasks={len(tasks)} results={len(results)}")
 
         failed_items: list[tuple[str, str, str]] = []
         provider_success: dict[str, list[Path]] = {}
@@ -1173,6 +1245,7 @@ class DailySelfieService:
         for pid, paths in provider_success.items():
             if paths:
                 logger.info("[DailySelfie] 人格 %s 提供商 %s 完成 %d 张，发布空间", persona_name, pid, len(paths))
+                self._record_debug("INFO", f"提供商 {pid} 完成 {len(paths)} 张，发布空间")
                 await self._publish_to_qzone(persona_name, paths, persona["config"])
 
         return success, fail
@@ -1272,6 +1345,7 @@ class DailySelfieService:
                 "[DailySelfie] 人格 %s 未启用空间发布或未配置多模态提供商，跳过",
                 persona_name,
             )
+            self._record_debug("INFO", "未启用空间发布或未配置多模态提供商，跳过")
             return
 
         caption = await self._generate_qzone_caption(
@@ -1570,6 +1644,7 @@ class DailySelfieService:
                 return parsed
             except asyncio.TimeoutError:
                 logger.error("[DailySelfie] LLM第1轮(场景)调用超时(360s)(第%d次)", attempt + 1)
+                self._record_debug("ERROR", f"LLM第1轮(场景)调用超时(360s)(第{attempt + 1}次)")
                 if attempt == 0:
                     logger.info("[DailySelfie] LLM第1轮(场景)超时，重试一次")
                     continue
@@ -1647,6 +1722,7 @@ class DailySelfieService:
                 )
             except asyncio.TimeoutError:
                 logger.warning("[DailySelfie] 第2轮(创意设计)调用超时(第%d次)", attempt + 1)
+                self._record_debug("WARN", f"第2轮(创意设计)调用超时(第{attempt + 1}次)")
             except Exception as e:
                 logger.warning("[DailySelfie] 第2轮(创意设计)调用失败(第%d次): %s", attempt + 1, e)
 
@@ -1730,6 +1806,7 @@ class DailySelfieService:
                 )
             except asyncio.TimeoutError:
                 logger.warning("[DailySelfie] 第3轮(审核)调用超时(第%d次)", attempt + 1)
+                self._record_debug("WARN", f"第3轮(审核)调用超时(第{attempt + 1}次)")
             except Exception as e:
                 logger.warning("[DailySelfie] 第3轮(审核)调用失败(第%d次): %s", attempt + 1, e)
 
@@ -1811,14 +1888,17 @@ class DailySelfieService:
                         "[DailySelfie] 设计 %d 审核未通过但无改进版，保留原设计。issues: %s",
                         i, issues,
                     )
+                    self._record_debug("INFO", f"设计 {i} 审核未通过但无改进版，保留原设计")
                 else:
                     logger.info("[DailySelfie] 设计 %d 审核通过", i)
+                    self._record_debug("INFO", f"设计 {i} 审核通过")
                 final.append(design)
             else:
                 logger.info(
                     "[DailySelfie] 设计 %d 审核未通过，应用改进版。issues: %s",
                     i, issues,
                 )
+                self._record_debug("INFO", f"设计 {i} 审核未通过，应用改进版")
                 # merge：审核师改进版可能只返回修改过的字段，未修改字段保留原设计。
                 # 过滤掉 None 值，防止改进版中的 None 覆盖原设计的有效字段
                 # （LLM 可能偏离指令返回部分字段为 null，会导致下游 f-string 渲染成 "None"）
@@ -1887,6 +1967,7 @@ class DailySelfieService:
                 return parsed
             except asyncio.TimeoutError:
                 logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(360s)(第%d次)", attempt + 1)
+                self._record_debug("ERROR", f"第4轮(提示词构建)调用超时(360s)(第{attempt + 1}次)")
                 if attempt == 0:
                     logger.info("[DailySelfie] 第4轮(提示词构建)超时，重试一次")
                     continue
