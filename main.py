@@ -259,14 +259,14 @@ class GiteeAIImagePlugin(Star):
         if migrated:
             self.refs = ReferenceStore(self.data_dir)
 
-    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path, mode: str = "") -> None:
+    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path, mode: str = "", prompt: str = "") -> None:
         try:
             user_id = str(event.get_sender_id() or "")
         except Exception:
             user_id = ""
         if not user_id:
             return
-        self._last_image_by_user[user_id] = {"path": Path(image_path), "mode": mode}
+        self._last_image_by_user[user_id] = {"path": Path(image_path), "mode": mode, "prompt": prompt or ""}
 
     @staticmethod
     def _as_int(value: Any, *, default: int) -> int:
@@ -885,7 +885,7 @@ class GiteeAIImagePlugin(Star):
             )
             t_end = time.perf_counter()
 
-            self._remember_last_image(event, image_path)
+            self._remember_last_image(event, image_path, prompt=prompt)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
@@ -1765,7 +1765,7 @@ class GiteeAIImagePlugin(Star):
             image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
                 event, prompt, mode, target_backend, size, resolution
             )
-            self._remember_last_image(event, image_path, mode=result_mode)
+            self._remember_last_image(event, image_path, mode=result_mode, prompt=prompt)
             if result_mode == "selfie":
                 await self._track_selfie_quota(event, used_pid=used_pid)
             sent = await self._send_image_with_fallback(event, image_path)
@@ -2508,7 +2508,7 @@ class GiteeAIImagePlugin(Star):
             )
             t_end = time.perf_counter()
 
-            self._remember_last_image(event, image_path)
+            self._remember_last_image(event, image_path, prompt=prompt)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
@@ -2613,7 +2613,7 @@ class GiteeAIImagePlugin(Star):
             )
             t_end = time.perf_counter()
 
-            self._remember_last_image(event, image_path)
+            self._remember_last_image(event, image_path, prompt=prompt)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
@@ -2795,7 +2795,7 @@ class GiteeAIImagePlugin(Star):
             mode: str = "",
             used_pid: str | None = None,
     ) -> mcp.types.CallToolResult | None:
-        self._remember_last_image(event, image_path, mode=mode)
+        self._remember_last_image(event, image_path, mode=mode, prompt=prompt)
 
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
@@ -3248,7 +3248,7 @@ class GiteeAIImagePlugin(Star):
         try:
             await mark_processing(event)
             image_path, used_pid = await self._generate_selfie_image(event, prompt, backend, size=size)
-            self._remember_last_image(event, image_path, mode="selfie")
+            self._remember_last_image(event, image_path, mode="selfie", prompt=prompt)
             await self._trigger_wardrobe_auto_save(event)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
