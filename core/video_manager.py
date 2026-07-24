@@ -184,8 +184,8 @@ class VideoManager:
             # fallback copy if replace fails
             await asyncio.to_thread(tmp_path.rename, path)
 
-        logger.info(
-            f"[VideoManager] 下载完成: path={path}, 耗时={time.perf_counter() - t0:.2f}s"
+        logger.debug(
+            f"[VideoManager] 下载完成: 耗时={time.perf_counter() - t0:.2f}s"
         )
 
         await self.cleanup_old_videos()

@@ -128,7 +128,7 @@ class ImageManager:
                 data = b"".join(chunks)
                 break
 
-        logger.info(
+        logger.debug(
             f"[ImageManager] 网络下载耗时: {time.time() - t0:.2f}s, 大小: {len(data)} bytes"
         )
 
@@ -146,7 +146,7 @@ class ImageManager:
 
         t1 = time.time()
         await self.cleanup_old_images()
-        logger.info(
+        logger.debug(
             f"[ImageManager] 保存耗时: {t1 - t0:.2f}s, 清理耗时: {time.time() - t1:.2f}s"
         )
 

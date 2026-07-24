@@ -129,7 +129,7 @@ class GiteeAIImagePlugin(Star):
             return True
         except Exception as exc:
             logger.warning(
-                "[GiteeAIImagePlugin] friend_poke failed: target=%s err=%s",
+                "[poke] friend_poke 失败: target=%s err=%s",
                 target_id,
                 exc,
             )
@@ -139,7 +139,7 @@ class GiteeAIImagePlugin(Star):
             return True
         except Exception as exc:
             logger.warning(
-                "[GiteeAIImagePlugin] send_poke failed: target=%s err=%s",
+                "[poke] send_poke 失败: target=%s err=%s",
                 target_id,
                 exc,
             )
@@ -160,7 +160,7 @@ class GiteeAIImagePlugin(Star):
             self.config, imgr=self.imgr, data_dir=self.data_dir
         )
         for err in self.registry.validate():
-            logger.warning("[GiteeAIImagePlugin][config] %s", err)
+            logger.warning("[aiimg][config] %s", err)
 
         self.draw = ImageDrawService(
             self.config, self.imgr, self.data_dir, registry=self.registry
@@ -191,7 +191,7 @@ class GiteeAIImagePlugin(Star):
         await self.daily_selfie.start()
 
         logger.info(
-            f"[GiteeAIImagePlugin] 插件初始化完成: "
+            f"[aiimg] 插件初始化完成: "
             f"改图后端={self.edit.get_available_backends()}, "
             f"改图预设={len(self.edit.get_preset_names())}个, "
             f"视频启用={bool(self._get_feature('video').get('enabled', False))}, "
@@ -243,7 +243,7 @@ class GiteeAIImagePlugin(Star):
         if legacy_refs.exists() and not current_refs.exists():
             try:
                 _shutil.copytree(str(legacy_refs), str(current_refs))
-                logger.info("[aiimg] 已迁移旧参考照数据: %s -> %s", legacy_refs, current_refs)
+                logger.debug("[aiimg] 已迁移旧参考照数据: %s -> %s", legacy_refs, current_refs)
                 migrated = True
             except Exception as e:
                 logger.warning("[aiimg] 迁移旧参考照数据失败: %s", e)
@@ -252,7 +252,7 @@ class GiteeAIImagePlugin(Star):
         if legacy_images.exists() and not current_images.exists():
             try:
                 _shutil.copytree(str(legacy_images), str(current_images))
-                logger.info("[aiimg] 已迁移旧图片数据: %s -> %s", legacy_images, current_images)
+                logger.debug("[aiimg] 已迁移旧图片数据: %s -> %s", legacy_images, current_images)
                 migrated = True
             except Exception as e:
                 logger.warning("[aiimg] 迁移旧图片数据失败: %s", e)
@@ -295,7 +295,7 @@ class GiteeAIImagePlugin(Star):
         try:
             from astrbot.core.agent import tool_image_cache as cache_module
         except Exception as exc:
-            logger.debug("[GiteeAIImagePlugin] skip tool image cache runtime patch: %s", exc)
+            logger.debug("[aiimg] skip tool image cache runtime patch: %s", exc)
             return
 
         cache_cls = getattr(cache_module, "ToolImageCache", None)
@@ -329,12 +329,12 @@ class GiteeAIImagePlugin(Star):
                 image_bytes = base64.b64decode(base64_data)
                 file_path.write_bytes(image_bytes)
             except Exception as exc:
-                logger.error(f"Failed to save tool image: {exc}")
+                logger.error("保存 tool image 失败: %s", exc)
                 raise
 
             cache_self._cache_dir = str(cache_dir)
             logger.debug(
-                "[GiteeAIImagePlugin] tool image cache runtime patch wrote: %s", file_path
+                "[aiimg] tool image cache runtime patch wrote: %s", file_path
             )
             return cached_image_cls(
                 tool_call_id=tool_call_id,
@@ -350,8 +350,8 @@ class GiteeAIImagePlugin(Star):
             / getattr(cache_cls, "CACHE_DIR_NAME", "tool_images")
         )
         Path(cache_obj._cache_dir).mkdir(parents=True, exist_ok=True)
-        logger.info(
-            "[GiteeAIImagePlugin] tool image cache runtime patch active: %s",
+        logger.debug(
+            "[aiimg] tool image cache runtime patch active: %s",
             cache_obj._cache_dir,
         )
 
@@ -546,7 +546,7 @@ class GiteeAIImagePlugin(Star):
             )
         except Exception as exc:
             logger.debug(
-                "[GiteeAIImagePlugin] skip agent runner direct-send patch: %s", exc
+                "[aiimg] skip agent runner direct-send patch: %s", exc
             )
             return
 
@@ -594,9 +594,7 @@ class GiteeAIImagePlugin(Star):
 
         ToolLoopAgentRunner._handle_function_tools = _patched_handle_function_tools
         ToolLoopAgentRunner._aiimg_direct_send_patched = True
-        logger.info(
-            "[GiteeAIImagePlugin] agent runner direct-send patch active"
-        )
+        logger.debug("[aiimg] agent runner direct-send patch active")
 
     def _register_preset_commands(self):
         """动态注册预设命令
@@ -611,7 +609,7 @@ class GiteeAIImagePlugin(Star):
             # 创建闭包捕获 preset_name
             self._create_and_register_preset_handler(preset_name)
 
-        logger.info(f"[GiteeAIImagePlugin] 已注册 {len(preset_names)} 个预设命令")
+        logger.debug(f"[aiimg] 已注册 {len(preset_names)} 个预设命令")
 
     def _create_and_register_preset_handler(self, preset_name: str):
         """为单个预设创建并注册命令处理器
@@ -891,9 +889,7 @@ class GiteeAIImagePlugin(Star):
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
-                logger.warning(
-                    "[文生图] 图片发送失败，已仅使用表情标注: reason=%s", sent.reason
-                )
+                logger.warning("[文生图] 发送失败，仅用表情标注: reason=%s", sent.reason)
                 return
 
             # 标记成功
@@ -1619,7 +1615,6 @@ class GiteeAIImagePlugin(Star):
         origin = getattr(event, "unified_msg_origin", "") or ""
         if message_id and origin:
             if self.debouncer.llm_tool_is_duplicate(message_id, origin):
-                logger.debug(f"[aiimg_generate] 重复调用已拦截: msg_id={message_id}")
                 await mark_success(event)
                 return None
 
@@ -1636,10 +1631,7 @@ class GiteeAIImagePlugin(Star):
         b_raw = (backend or "auto").strip()
         target_backend = self.registry.resolve_backend(b_raw, kind="image")
         if b_raw and b_raw.lower() != "auto" and target_backend is None:
-            logger.warning(
-                "[aiimg_generate] 忽略未知 backend 覆盖，回退自动链路: backend=%s",
-                b_raw,
-            )
+            logger.warning("[aiimg] 未知 backend 覆盖，回退自动链路: %s", b_raw)
 
         output = (output or "").strip()
         size = output if output and "x" in output else None
@@ -1686,7 +1678,7 @@ class GiteeAIImagePlugin(Star):
         use_wardrobe: bool = True,
     ) -> tuple[Path, str, str | None]:
         if m in {"selfie_ref", "selfie", "ref"}:
-            logger.info("[aiimg_generate] route=selfie_ref (explicit)")
+            logger.debug("[aiimg] route=selfie_ref (explicit)")
             if not self._is_selfie_enabled():
                 raise RuntimeError("自拍功能未启用")
             if not self._is_selfie_llm_enabled():
@@ -1699,12 +1691,12 @@ class GiteeAIImagePlugin(Star):
 
         if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
             if not self._is_selfie_enabled():
-                logger.info("[aiimg_generate] auto-selfie skipped: features.selfie.enabled=false")
+                logger.debug("[aiimg] auto-selfie skipped: features.selfie.enabled=false")
             elif not self._is_selfie_llm_enabled():
-                logger.info("[aiimg_generate] auto-selfie skipped: features.selfie.llm_tool_enabled=false")
+                logger.debug("[aiimg] auto-selfie skipped: features.selfie.llm_tool_enabled=false")
             else:
                 try:
-                    logger.info("[aiimg_generate] route=auto->selfie_ref")
+                    logger.debug("[aiimg] route=auto->selfie_ref")
                     image_path, used_pid = await self._generate_selfie_image(
                         event, prompt, target_backend, size=size, resolution=resolution,
                         use_wardrobe=use_wardrobe,
@@ -1725,7 +1717,7 @@ class GiteeAIImagePlugin(Star):
         if m in {"edit", "img2img", "aiedit"} or (
             m == "auto" and (has_msg_images or has_at_avatar_refs)
         ):
-            logger.info("[aiimg_generate] route=edit")
+            logger.debug("[aiimg] route=edit")
             edit_conf = self._get_feature("edit")
             if not bool(edit_conf.get("enabled", True)):
                 raise RuntimeError("改图功能未启用")
@@ -1753,7 +1745,7 @@ class GiteeAIImagePlugin(Star):
         if not prompt:
             prompt = "a selfie photo"
 
-        logger.info("[aiimg_generate] route=draw")
+        logger.debug("[aiimg] route=draw")
         image_path = await self.draw.generate(
             prompt, provider_id=target_backend, size=size, resolution=resolution,
         )
@@ -1781,7 +1773,7 @@ class GiteeAIImagePlugin(Star):
                 await mark_success(event)
             else:
                 await self._signal_llm_tool_failure(event)
-                logger.warning("[aiimg_generate][bg] 图片发送失败: reason=%s", sent.reason)
+                logger.warning("[aiimg][bg] 发送失败: reason=%s", sent.reason)
         except Exception as e:
             logger.error(f"[aiimg_generate][bg] 失败: {e}", exc_info=True)
             await self._signal_llm_tool_failure(event)
@@ -1983,7 +1975,7 @@ class GiteeAIImagePlugin(Star):
             file_send_tries += 1
             try:
                 await event.send(event.chain_result([File(name=p.name, file=str(p))]))
-                logger.info(
+                logger.debug(
                     "[send_image][file-fallback-v2] file send success: %s (%s bytes), trigger=%s, try=%s",
                     p.name, size_bytes, trigger, file_send_tries,
                 )
@@ -2028,7 +2020,7 @@ class GiteeAIImagePlugin(Star):
                 data = await asyncio.to_thread(p.read_bytes)
                 await event.send(event.chain_result([Image.fromBytes(data)]))
                 if fs_exc is not None:
-                    logger.info(
+                    logger.debug(
                         "[send_image] fromBytes fallback succeeded (attempt=%s/%s).",
                         attempt, attempts,
                     )
@@ -2056,7 +2048,7 @@ class GiteeAIImagePlugin(Star):
                         self._build_compact_image_bytes, p
                     )
                     if compact_bytes:
-                        logger.info(
+                        logger.debug(
                             "[send_image] prepared compact fallback image: %s -> %s bytes",
                             p, len(compact_bytes),
                         )
@@ -2065,7 +2057,7 @@ class GiteeAIImagePlugin(Star):
                         await event.send(
                             event.chain_result([Image.fromBytes(compact_bytes)])
                         )
-                        logger.info(
+                        logger.debug(
                             "[send_image] compact fromBytes fallback succeeded (attempt=%s/%s).",
                             attempt, attempts,
                         )
@@ -2089,7 +2081,7 @@ class GiteeAIImagePlugin(Star):
                 rich_media_failures += 1
 
             if rich_media_failures >= 2:
-                logger.info(
+                logger.debug(
                     "[send_image] detected repeated rich media transfer failures, stop retrying early."
                 )
                 break
@@ -2214,9 +2206,9 @@ class GiteeAIImagePlugin(Star):
                 return True
             except Exception as e:
                 if self._is_timeout_likely_sent(e):
-                    logger.warning(f"[视频] 本地文件发送遇到超时错误，消息可能已送达，不再尝试其他方式: {e}")
+                    logger.warning("[视频] 本地发送超时，可能已送达: %s", e)
                     return True
-                logger.warning(f"[视频] 本地文件发送失败: {e}")
+                logger.warning("[视频] 本地发送失败: %s", e)
                 return False
 
         async def _send_url(url: str) -> bool:
@@ -2228,9 +2220,9 @@ class GiteeAIImagePlugin(Star):
                 return True
             except Exception as e:
                 if self._is_timeout_likely_sent(e):
-                    logger.warning(f"[视频] URL 发送遇到超时错误，消息可能已送达，不再尝试其他方式: {e}")
+                    logger.warning("[视频] URL 发送超时，可能已送达: %s", e)
                     return True
-                logger.warning(f"[视频] URL 发送失败: {e}")
+                logger.warning("[视频] URL 发送失败: %s", e)
                 return False
 
         # file/url forced
@@ -2308,7 +2300,7 @@ class GiteeAIImagePlugin(Star):
                 "file": str(getattr(seg, "file", "") or "")[:120],
                 "path": str(getattr(seg, "path", "") or "")[:120],
             }
-            logger.warning(f"[视频] seg 所有字段均失败，seg 诊断: {diag}")
+            logger.debug(f"[视频] seg 所有字段均失败，seg 诊断: {diag}")
         except Exception:
             pass
         return None, None
@@ -2370,7 +2362,7 @@ class GiteeAIImagePlugin(Star):
                             image_bytes = fallback_bytes
                             if not image_url and fallback_url:
                                 image_url = fallback_url
-                            logger.info(
+                            logger.debug(
                                 "[视频] 图片 %s 字段 fallback 成功: size=%s bytes",
                                 i + 1,
                                 len(image_bytes),
@@ -2382,7 +2374,7 @@ class GiteeAIImagePlugin(Star):
             if image_bytes and (not image_url or not image_url.startswith(("http://", "https://"))):
                 from .core.grok_video_service import _build_data_url
                 image_url = _build_data_url(image_bytes)
-                logger.info(
+                logger.debug(
                     "[视频] image_url 非远程链接，已从 image_bytes 构建 data URL: "
                     "size=%s bytes, data URL 长度=%s",
                     len(image_bytes),
@@ -2483,7 +2475,6 @@ class GiteeAIImagePlugin(Star):
             include_avatar=True,
             include_sender_avatar_fallback=False,
         )
-        logger.debug(f"[改图] 获取到 {len(image_segs)} 个图片段")
         if not image_segs:
             await mark_failed(event)
             return
@@ -2491,12 +2482,8 @@ class GiteeAIImagePlugin(Star):
         bytes_images: list[bytes] = []
         for i, seg in enumerate(image_segs):
             try:
-                logger.debug(f"[改图] 转换图片 {i + 1}/{len(image_segs)}...")
                 b64 = await seg.convert_to_base64()
                 bytes_images.append(base64.b64decode(b64))
-                logger.debug(
-                    f"[改图] 图片 {i + 1} 转换成功, 大小={len(bytes_images[-1])} bytes"
-                )
             except Exception as e:
                 logger.warning(f"[改图] 图片 {i + 1} 转换失败，跳过: {e}")
 
@@ -2813,10 +2800,7 @@ class GiteeAIImagePlugin(Star):
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
             await self._signal_llm_tool_failure(event)
-            logger.warning(
-                "[aiimg_generate] 无损原图发送失败，已使用表情标注: reason=%s",
-                sent.reason,
-            )
+            logger.warning("[aiimg] 无损原图发送失败: reason=%s", sent.reason)
             return self._build_llm_tool_failure_result("图片发送失败")
 
         await mark_success(event)
@@ -2836,9 +2820,7 @@ class GiteeAIImagePlugin(Star):
         result = await self._build_llm_tool_image_result(image_path)
         if result is not None:
             return result
-        logger.warning(
-            "[aiimg_generate] LLM上下文图片构建失败，降级为文字描述"
-        )
+        logger.warning("[aiimg] LLM 上下文图片构建失败，降级文字描述")
         return self._build_llm_tool_text_desc_result(prompt)
 
     async def _track_selfie_quota(self, event: AstrMessageEvent, *, used_pid: str | None = None) -> None:
@@ -2859,17 +2841,17 @@ class GiteeAIImagePlugin(Star):
                     if limit is None and providers:
                         limit = providers[0]["daily_limit"]
                         logger.warning(
-                            "[aiimg_generate] provider=%s 不在人格 %s 配置中,用 limit=%s 兜底",
+                            "[aiimg] provider=%s 不在人格 %s 配置中, limit=%s 兜底",
                             used_pid, persona_name, limit,
                         )
                     if limit is not None:
                         if await self.daily_selfie.counter.reserve(persona_name, used_pid, limit):
-                            logger.info("[aiimg_generate] 自拍计数+1: persona=%s provider=%s", persona_name, used_pid)
+                            logger.debug("[aiimg] 自拍计数+1: persona=%s provider=%s", persona_name, used_pid)
                 else:
                     for pv in providers:
                         pid = pv["provider_id"]
                         if await self.daily_selfie.counter.reserve(persona_name, pid, pv["daily_limit"]):
-                            logger.info("[aiimg_generate] 自拍计数+1(链路兜底): persona=%s provider=%s", persona_name, pid)
+                            logger.debug("[aiimg] 自拍计数+1(链路兜底): persona=%s provider=%s", persona_name, pid)
                             break
                 break
         except Exception as e:
@@ -2922,7 +2904,6 @@ class GiteeAIImagePlugin(Star):
         for idx in [1, 2, 3]:
             conf = self._get_selfie_persona_config(idx)
             if not conf:
-                logger.debug("[selfie_ref] selfie_persona_%s 无配置", idx)
                 continue
             conf_persona = str(conf.get("select_persona", "") or conf.get("persona_name", "")).strip()
             logger.debug("[selfie_ref] selfie_persona_%s: select_persona=%r vs persona_name=%r match=%s", idx, conf_persona, persona_name, conf_persona == persona_name)
@@ -3033,7 +3014,7 @@ class GiteeAIImagePlugin(Star):
             event, persona_name=persona_name
         )
         if not paths:
-            logger.info("[aiimg_generate] auto-selfie skipped: no reference images")
+            logger.debug("[aiimg] auto-selfie skipped: no reference images")
             return False
         logger.debug(
             "[aiimg_generate] auto-selfie candidate: persona=%s refs=%s source=%s",
@@ -3164,7 +3145,7 @@ class GiteeAIImagePlugin(Star):
                 cached = self._wardrobe_preview_cache.pop(user_id, None)
                 if cached:
                     ref = cached
-                    logger.info(
+                    logger.debug(
                         "[selfie] 使用 wardrobe_preview 缓存: image_id=%s",
                         ref.get("image_id", "未知"),
                     )
@@ -3181,7 +3162,7 @@ class GiteeAIImagePlugin(Star):
                 if ref:
                     ref_paths.append(Path(ref["image_path"]))
                     wardrobe_ref_added = True
-                    logger.info(
+                    logger.debug(
                         "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
                         ref.get("persona", "未知"),
                         ref.get("image_id", "未知"),
@@ -3272,10 +3253,7 @@ class GiteeAIImagePlugin(Star):
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
                 await mark_failed(event)
-                logger.warning(
-                    "[自拍] 结果发送失败，已仅使用表情标注: reason=%s",
-                    sent.reason,
-                )
+                logger.warning("[自拍] 发送失败，仅用表情标注: reason=%s", sent.reason)
                 return
             await mark_success(event)
             await self._track_selfie_quota(event, used_pid=used_pid)
@@ -3296,7 +3274,7 @@ class GiteeAIImagePlugin(Star):
     ) -> Path | None:
         ref_paths = self._get_persona_config_selfie_reference_paths(persona_name)
         if not ref_paths:
-            logger.warning("[daily_selfie] 人格 %s 无参考照，跳过", persona_name)
+            logger.warning("[daily_selfie] 人格 %s 无参考照", persona_name)
             return None
 
         if ref_image_path:
@@ -3334,14 +3312,14 @@ class GiteeAIImagePlugin(Star):
         final_prompt = prompt
 
         if provider_id:
-            logger.info(
+            logger.debug(
                 "[daily_selfie] persona=%s prompt=%s provider=%s (daily_selfie_provider)",
                 persona_name,
                 final_prompt,
                 provider_id,
             )
         else:
-            logger.info(
+            logger.debug(
                 "[daily_selfie] persona=%s prompt=%s providers=%s",
                 persona_name,
                 final_prompt,
@@ -3355,7 +3333,7 @@ class GiteeAIImagePlugin(Star):
             logger.error("[daily_selfie] self.edit.registry is None! 插件可能已被 terminate")
             return None
         available = self.edit.get_available_backends()
-        logger.info("[daily_selfie] edit可用后端: %s", available)
+        logger.debug("[daily_selfie] edit可用后端: %s", available)
 
         return await self.edit.edit(
             prompt=final_prompt,
@@ -3427,7 +3405,7 @@ class GiteeAIImagePlugin(Star):
         if persona_name:
             persona_webui = self._get_persona_config_selfie_reference_paths(persona_name)
             if persona_webui:
-                logger.info(
+                logger.debug(
                     "[自拍参考] 人格 %s 的命令参考照已删除，但 WebUI selfie_personas 仍生效",
                     persona_name,
                 )

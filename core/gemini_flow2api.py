@@ -505,14 +505,14 @@ class GeminiFlow2ApiBackend:
                 data = await resp.json()
                 image_ref = _extract_first_image_ref_from_obj(data)
                 if image_ref:
-                    logger.info(
+                    logger.debug(
                         "[GeminiFlow2API] 非流式 JSON 命中图片引用, 耗时: %.2fs",
                         time.perf_counter() - t0,
                     )
                     return image_ref
                 video_ref = _extract_first_video_ref_from_obj(data)
                 if video_ref:
-                    logger.info(
+                    logger.debug(
                         "[GeminiFlow2API] 非流式 JSON 命中视频引用, 耗时: %.2fs",
                         time.perf_counter() - t0,
                     )
@@ -520,7 +520,7 @@ class GeminiFlow2ApiBackend:
                 content = ((data.get("choices") or [{}])[0].get("message") or {}).get(
                     "content"
                 ) or ""
-                logger.info(
+                logger.debug(
                     "[GeminiFlow2API] 非流式 JSON 响应耗时: %.2fs",
                     time.perf_counter() - t0,
                 )
@@ -541,7 +541,7 @@ class GeminiFlow2ApiBackend:
                         continue
                     data_str = line[5:].strip()
                     if data_str == "[DONE]":
-                        logger.info(
+                        logger.debug(
                             "[GeminiFlow2API] SSE 结束, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
@@ -606,7 +606,7 @@ class GeminiFlow2ApiBackend:
                         chunk_image_ref
                         and chunk_image_ref.startswith(("http://", "https://"))
                     ) or chunk_video_ref:
-                        logger.info(
+                        logger.debug(
                             "[GeminiFlow2API] 提前命中结构化媒体引用, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
@@ -614,7 +614,7 @@ class GeminiFlow2ApiBackend:
                     if (
                         image_ref and image_ref.startswith(("http://", "https://"))
                     ) or video_ref:
-                        logger.info(
+                        logger.debug(
                             "[GeminiFlow2API] 提前命中媒体引用, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
@@ -625,7 +625,7 @@ class GeminiFlow2ApiBackend:
                             "Flow2API 返回内容过大，已终止解析（可能是服务异常输出）"
                         )
 
-            logger.info(
+            logger.debug(
                 "[GeminiFlow2API] SSE 读完但无 [DONE], 耗时: %.2fs",
                 time.perf_counter() - t0,
             )
@@ -852,14 +852,14 @@ class Flow2ApiVideoBackend:
                 data = await resp.json()
                 video_ref = _extract_first_video_ref_from_obj(data)
                 if video_ref:
-                    logger.info(
+                    logger.debug(
                         "[Flow2API-Video] 非流式 JSON 命中视频引用, 耗时: %.2fs",
                         time.perf_counter() - t0,
                     )
                     return video_ref
                 image_ref = _extract_first_image_ref_from_obj(data)
                 if image_ref:
-                    logger.info(
+                    logger.debug(
                         "[Flow2API-Video] 非流式 JSON 命中图片引用, 耗时: %.2fs",
                         time.perf_counter() - t0,
                     )
@@ -867,7 +867,7 @@ class Flow2ApiVideoBackend:
                 content = ((data.get("choices") or [{}])[0].get("message") or {}).get(
                     "content"
                 ) or ""
-                logger.info(
+                logger.debug(
                     "[Flow2API-Video] 非流式 JSON 响应耗时: %.2fs",
                     time.perf_counter() - t0,
                 )
@@ -888,7 +888,7 @@ class Flow2ApiVideoBackend:
                         continue
                     data_str = line[5:].strip()
                     if data_str == "[DONE]":
-                        logger.info(
+                        logger.debug(
                             "[Flow2API-Video] SSE 结束, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
@@ -954,7 +954,7 @@ class Flow2ApiVideoBackend:
                         chunk_image_ref
                         and chunk_image_ref.startswith(("http://", "https://"))
                     ):
-                        logger.info(
+                        logger.debug(
                             "[Flow2API-Video] 提前命中结构化媒体引用, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
@@ -962,13 +962,13 @@ class Flow2ApiVideoBackend:
                     if video_ref or (
                         image_ref and image_ref.startswith(("http://", "https://"))
                     ):
-                        logger.info(
+                        logger.debug(
                             "[Flow2API-Video] 提前命中媒体引用, 耗时: %.2fs",
                             time.perf_counter() - t0,
                         )
                         return full
 
-            logger.info(
+            logger.debug(
                 "[Flow2API-Video] SSE 读完但无 [DONE], 耗时: %.2fs",
                 time.perf_counter() - t0,
             )

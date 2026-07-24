@@ -102,7 +102,6 @@ class ImageEditService:
                     return file_url
                 if status in {"failed", "cancelled"}:
                     raise RuntimeError(f"任务失败: {status}")
-            logger.debug(f"[图生图轮询] 第{i + 1}轮任务状态：{status}")
             await asyncio.sleep(self.econf["poll_interval"])
 
         raise TimeoutError("图生图任务超时")

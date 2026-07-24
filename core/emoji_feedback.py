@@ -30,15 +30,8 @@ async def _get_message_id(event: AstrMessageEvent) -> int | None:
         # AiocqhttpMessageEvent 有 message_obj.raw_message
         if hasattr(event, "message_obj"):
             raw = event.message_obj.raw_message
-            logger.debug(
-                f"[emoji_feedback] raw_message type={type(raw).__name__}, value={raw}"
-            )
             if isinstance(raw, dict) and "message_id" in raw:
                 return int(raw["message_id"])
-            else:
-                logger.debug("[emoji_feedback] raw_message 不是 dict 或无 message_id")
-        else:
-            logger.debug("[emoji_feedback] event 无 message_obj 属性")
     except Exception as e:
         logger.debug(f"[emoji_feedback] 获取消息ID失败: {e}")
     return None
@@ -72,17 +65,14 @@ async def set_emoji(
     """
     message_id = await _get_message_id(event)
     if message_id is None:
-        logger.debug("[emoji_feedback] 无法获取消息ID，跳过贴表情")
         return False
 
     bot = await _get_bot(event)
     if bot is None:
-        logger.debug("[emoji_feedback] 无法获取bot实例，跳过贴表情")
         return False
 
     # 检查 bot 是否支持 set_msg_emoji_like
     if not hasattr(bot, "set_msg_emoji_like"):
-        logger.debug("[emoji_feedback] bot不支持set_msg_emoji_like，跳过贴表情")
         return False
 
     try:
@@ -91,9 +81,6 @@ async def set_emoji(
             emoji_id=emoji_id,
             emoji_type=emoji_type,
             set=True,
-        )
-        logger.debug(
-            f"[emoji_feedback] 贴表情成功: message_id={message_id}, emoji_id={emoji_id}"
         )
         return True
     except Exception as e:

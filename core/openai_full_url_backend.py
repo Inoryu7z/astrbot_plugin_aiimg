@@ -373,7 +373,7 @@ class OpenAIFullURLBackend:
         t0 = time.perf_counter()
         resp = await self._post_json(self.full_generate_url, key, payload)
         out = await self._save_response(resp, endpoint_url=self.full_generate_url)
-        logger.info("[OpenAIFullURL][generate] 耗时: %.2fs", time.perf_counter() - t0)
+        logger.debug("[OpenAIFullURL][generate] 耗时: %.2fs", time.perf_counter() - t0)
         return out
 
     async def edit(
@@ -437,7 +437,7 @@ class OpenAIFullURLBackend:
             if force_single_output and "sequential_image_generation" not in payload:
                 payload["sequential_image_generation"] = "disabled"
 
-            logger.info(
+            logger.debug(
                 "[OpenAIFullURL][edit] mode=json_image_array refs=%s field=%s endpoint=%s",
                 len(refs),
                 image_field,
@@ -445,7 +445,7 @@ class OpenAIFullURLBackend:
             )
             response = await self._post_json(endpoint, key, payload)
             out = await self._save_response(response, endpoint_url=endpoint)
-            logger.info("[OpenAIFullURL][edit] 耗时: %.2fs", time.perf_counter() - t0)
+            logger.debug("[OpenAIFullURL][edit] 耗时: %.2fs", time.perf_counter() - t0)
             return out
 
         merged_img = _build_collage(images)
@@ -453,7 +453,7 @@ class OpenAIFullURLBackend:
         b64 = base64.b64encode(merged_img).decode("utf-8")
         data_url = f"data:{mime};base64,{b64}"
 
-        logger.info(
+        logger.debug(
             "[OpenAIFullURL][edit] mode=collage refs=%s endpoint=%s",
             len(images),
             endpoint,
@@ -487,5 +487,5 @@ class OpenAIFullURLBackend:
             )
 
         out = await self._save_response(response, endpoint_url=endpoint)
-        logger.info("[OpenAIFullURL][edit] 耗时: %.2fs", time.perf_counter() - t0)
+        logger.debug("[OpenAIFullURL][edit] 耗时: %.2fs", time.perf_counter() - t0)
         return out

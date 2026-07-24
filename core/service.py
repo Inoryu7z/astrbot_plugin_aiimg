@@ -183,7 +183,6 @@ class ImageService:
 
         # 处理图片二进制数据
         for idx, img_bytes in enumerate(image_data_list):
-            logger.debug(f"[_create_edit_task] 添加图片 {idx}: {len(img_bytes)} bytes")
             data.add_field(
                 "image",
                 img_bytes,
@@ -243,10 +242,6 @@ class ImageService:
 
                 elif status in ["failed", "cancelled"]:
                     raise RuntimeError(f"图生图任务 {status}")
-
-                logger.debug(
-                    f"图生图任务 {task_id} 状态: {status} (第 {attempt} 次检查)"
-                )
 
             await asyncio.sleep(poll_interval)
 

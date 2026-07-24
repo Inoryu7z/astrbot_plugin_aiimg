@@ -121,7 +121,7 @@ class JimengApiBackend:
             except Exception:
                 raise RuntimeError(f"Jimeng API 返回非 JSON: {text[:200]}")
 
-        logger.info(f"[Jimeng] API 响应耗时: {time.time() - t0:.2f}s")
+        logger.debug(f"[Jimeng] API 响应耗时: {time.time() - t0:.2f}s")
 
         if data.get("code") != 200 or "image_url" not in data:
             msg = data.get("message") or data.get("text") or str(data)[:200]

@@ -619,7 +619,7 @@ class ProviderRegistry:
                 if models_list:
                     try:
                         backend = MultiModelVideoCascade(backend, models_list)
-                        logger.info(
+                        logger.debug(
                             "[ProviderRegistry] provider '%s' 启用多模型级联: %s",
                             pid,
                             models_list,

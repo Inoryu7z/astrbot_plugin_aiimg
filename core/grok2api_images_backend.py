@@ -354,7 +354,7 @@ class Grok2ApiImagesBackend:
                 f"Grok2API images.generate 未返回图片: {str(data)[:200]}"
             )
 
-        logger.info("[Grok2APIImages][generate] 耗时: %.2fs", time.perf_counter() - t0)
+        logger.debug("[Grok2APIImages][generate] 耗时: %.2fs", time.perf_counter() - t0)
         return await self._save_ref(ref)
 
     async def edit(
@@ -496,7 +496,7 @@ class Grok2ApiImagesBackend:
         if not ref:
             raise RuntimeError(f"Grok2API images.edit 未返回图片: {str(data)[:200]}")
 
-        logger.info("[Grok2APIImages][edit] 耗时: %.2fs", time.perf_counter() - t0)
+        logger.debug("[Grok2APIImages][edit] 耗时: %.2fs", time.perf_counter() - t0)
         return await self._save_ref(ref)
 
     async def _save_ref(self, ref: str) -> Path:

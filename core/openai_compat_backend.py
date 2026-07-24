@@ -527,7 +527,7 @@ class OpenAICompatBackend:
             )
             raise
 
-        logger.info(f"[OpenAICompat][magic666] HTTP 响应耗时: {time.time() - t0:.2f}s status={resp.status_code}")
+        logger.debug(f"[OpenAICompat][magic666] HTTP 响应耗时: {time.time() - t0:.2f}s status={resp.status_code}")
 
         if resp.status_code >= 400:
             body_text = resp.text[:500] if resp.text else ""
@@ -627,7 +627,7 @@ class OpenAICompatBackend:
 
         # s.apifox 中转站（magic666.top）走专用 JSON 路径，不使用 OpenAI SDK
         if self._is_magic666:
-            logger.info(
+            logger.debug(
                 "[OpenAICompat][magic666][generate] model=%s size=%s prompt_len=%d",
                 final_model, final_size, len(prompt),
             )
@@ -681,7 +681,7 @@ class OpenAICompatBackend:
                 )
                 raise
 
-        logger.info(f"[OpenAICompat][generate] API 响应耗时: {time.time() - t0:.2f}s")
+        logger.debug(f"[OpenAICompat][generate] API 响应耗时: {time.time() - t0:.2f}s")
         out_path = await self._save_images_response(resp)
         self._images_generate_disabled_until = 0.0
         if _looks_like_size(final_size):
@@ -731,7 +731,7 @@ class OpenAICompatBackend:
 
         # s.apifox 中转站（magic666.top）走专用 JSON 路径：image 字段为 base64 数组
         if self._is_magic666:
-            logger.info(
+            logger.debug(
                 "[OpenAICompat][magic666][edit] model=%s size=%s images=%d prompt_len=%d",
                 final_model, final_size, len(images), len(prompt),
             )
@@ -798,7 +798,7 @@ class OpenAICompatBackend:
                 )
                 raise
 
-        logger.info(f"[OpenAICompat][edit] API 响应耗时: {time.time() - t0:.2f}s")
+        logger.debug(f"[OpenAICompat][edit] API 响应耗时: {time.time() - t0:.2f}s")
         out_path = await self._save_images_response(resp)
         self._images_edit_disabled_until = 0.0
         if _looks_like_size(final_size):

@@ -158,7 +158,7 @@ class EditRouter:
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
-                logger.info("[edit] Provider=%s build failed: %s", pid, e)
+                logger.debug("[edit] Provider=%s build failed: %s", pid, e)
                 continue
 
             if size or resolution:
@@ -172,7 +172,7 @@ class EditRouter:
 
             for attempt in range(max_attempts):
                 try:
-                    logger.info(
+                    logger.debug(
                         "[edit] Provider=%s attempt=%s/%s",
                         pid,
                         attempt + 1,
@@ -195,7 +195,7 @@ class EditRouter:
                     if not result:
                         raise RuntimeError("Provider returned empty edit result")
                     self.last_success_provider = pid
-                    logger.info(
+                    logger.debug(
                         "[edit] Provider=%s success in %.2fs",
                         pid,
                         time.perf_counter() - t_start,
@@ -204,7 +204,7 @@ class EditRouter:
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
-                    logger.info(
+                    logger.debug(
                         "[edit] Provider=%s failed: %s", pid, e
                     )
                     if attempt + 1 < max_attempts:

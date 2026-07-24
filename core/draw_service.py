@@ -80,7 +80,7 @@ class ImageDrawService:
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
-                logger.info("[draw] Provider=%s build failed: %s", pid, e)
+                logger.debug("[draw] Provider=%s build failed: %s", pid, e)
                 continue
 
             output = out_override or default_output
@@ -100,14 +100,14 @@ class ImageDrawService:
                 result = await gen(prompt, size=final_size, resolution=final_res)
                 if not result:
                     raise RuntimeError("Provider returned empty generate result")
-                logger.info(
+                logger.debug(
                     "[draw] Provider=%s success in %.2fs", pid, time.perf_counter() - t0
                 )
                 return result
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
-                logger.info("[draw] Provider=%s failed: %s", pid, e)
+                logger.debug("[draw] Provider=%s failed: %s", pid, e)
 
         raise RuntimeError(
             f"Draw failed (last provider: {last_failed_pid}): {last_error}"
