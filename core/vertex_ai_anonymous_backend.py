@@ -122,9 +122,7 @@ class VertexAIAnonymousBackend:
         if not images:
             raise RuntimeError("Vertex AI Anonymous did not return image data")
         mime, b64 = images[0]
-        logger.info(
-            "[VertexAIAnonymous] generate ok: images=%s mime=%s", len(images), mime
-        )
+        logger.debug("[VertexAIAnonymous] generate ok: images=%s", len(images))
         return await self.imgr.save_base64_image(b64)
 
     async def edit(self, prompt: str, images: list[bytes], **kwargs) -> Path:
@@ -134,7 +132,7 @@ class VertexAIAnonymousBackend:
         if not out:
             raise RuntimeError("Vertex AI Anonymous did not return image data")
         mime, b64 = out[0]
-        logger.info("[VertexAIAnonymous] edit ok: images=%s mime=%s", len(out), mime)
+        logger.debug("[VertexAIAnonymous] edit ok: images=%s", len(out))
         return await self.imgr.save_base64_image(b64)
 
     async def _generate_images(
@@ -169,7 +167,7 @@ class VertexAIAnonymousBackend:
                     and captcha_try_count < 1
                 ):
                     captcha_try_count += 1
-                    logger.info(
+                    logger.debug(
                         "[VertexAIAnonymous] retry once with same recaptcha token"
                     )
                     continue

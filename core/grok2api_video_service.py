@@ -135,7 +135,7 @@ class Grok2ApiVideoService:
                 
                 if video_url:
                     t_end = time.perf_counter()
-                    logger.info(f"[Grok2ApiVideo] 成功: 耗时={t_end - t_start:.2f}s, url={video_url[:80]}...")
+                    logger.debug(f"[Grok2ApiVideo] 成功: 耗时={t_end - t_start:.2f}s")
                     return video_url
                 
                 raise RuntimeError(f"API 响应未包含视频 URL: {str(data)[:200]}")

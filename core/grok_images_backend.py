@@ -333,10 +333,9 @@ class GrokImagesBackend:
                     data = json.loads(raw_content.decode("utf-8"))
                     results = _parse_image_api_response(data)
                     if results:
-                        logger.info(
-                            "[GrokImages][generate] success in %.2fs format=%s",
+                        logger.debug(
+                            "[GrokImages][generate] success in %.2fs",
                             time.perf_counter() - t0,
-                            response_format or "default",
                         )
                         return await self._save_first_result(results)
                     last_error = "未能从响应中提取图片"
@@ -470,11 +469,9 @@ class GrokImagesBackend:
                         data = json.loads(raw_content.decode("utf-8"))
                         results = _parse_image_api_response(data)
                         if results:
-                            logger.info(
-                                "[GrokImages][edit] success in %.2fs size=%s format=%s",
+                            logger.debug(
+                                "[GrokImages][edit] success in %.2fs",
                                 time.perf_counter() - t0,
-                                current_size or "default",
-                                response_format or "default",
                             )
                             return await self._save_first_result(results)
                         last_error = "未能从响应中提取图片"

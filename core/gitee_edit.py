@@ -108,7 +108,7 @@ class GiteeEditBackend:
         api_key = await self._next_key()
         t_start = time.perf_counter()
 
-        logger.info(
+        logger.debug(
             f"[Gitee] 开始改图: model={self.model}, "
             f"task_types={list(task_types)}, images={len(images)}"
         )
@@ -216,8 +216,6 @@ class GiteeEditBackend:
                         error_msg = result.get("message", status)
                         logger.error(f"[Gitee] 任务失败: {error_msg}")
                         raise RuntimeError(f"Gitee 任务失败: {error_msg}")
-
-                    logger.debug(f"[Gitee] 轮询第{i + 1}轮, 状态: {status}")
 
             except aiohttp.ClientError as e:
                 logger.warning(f"[Gitee] 轮询网络错误 (第{i + 1}轮): {e}")

@@ -872,7 +872,7 @@ class OpenAIChatImageBackend:
         except Exception:
             pass
 
-        logger.info("[OpenAIChatImage][generate] API 响应耗时: %.2fs", time.time() - t0)
+        logger.debug("[OpenAIChatImage][generate] API 响应耗时: %.2fs", time.time() - t0)
         if not ref:
             video_url = await self._extract_video_ref_from_response(resp)
             if video_url:
@@ -973,7 +973,7 @@ class OpenAIChatImageBackend:
         except Exception:
             pass
 
-        logger.info("[OpenAIChatImage][edit] API 响应耗时: %.2fs", time.time() - t0)
+        logger.debug("[OpenAIChatImage][edit] API 响应耗时: %.2fs", time.time() - t0)
         if not ref:
             video_url = await self._extract_video_ref_from_response(resp)
             if video_url:

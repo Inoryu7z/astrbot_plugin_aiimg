@@ -74,14 +74,14 @@ def _compress_image_bytes_for_video(
             compressed = buf.getvalue()
 
             if len(compressed) >= original_size:
-                logger.info(
+                logger.debug(
                     "[compress_video] 压缩后未减小，使用原始图片: %s -> %s bytes",
                     original_size,
                     len(compressed),
                 )
                 return image_bytes
 
-            logger.info(
+            logger.debug(
                 "[compress_video] 图片压缩完成: %s -> %s, %s -> %s bytes",
                 original_dims,
                 im.size,
@@ -292,9 +292,7 @@ def _extract_video_url_from_response(
         content_preview = ""
         if isinstance(content, str):
             content_preview = content[:200]
-        logger.warning(
-            f"[GrokVideo] 未能提取视频 URL，content 片段: {content_preview}..."
-        )
+        logger.warning("[GrokVideo] 未能提取视频URL，content: %s...", content_preview)
         return None, "未能从 API 响应中提取到有效的视频 URL"
     except Exception as e:
         logger.warning(f"[GrokVideo] URL 提取异常: {e}")
@@ -483,9 +481,8 @@ class GrokVideoService:
             last_exc: Exception | None = None
             for attempt in range(self.max_retries + 1):
                 try:
-                    logger.info(
-                        f"[GrokVideo] 调用 API attempt={attempt + 1}/{self.max_retries + 1}, "
-                        f"prompt={final_prompt[:60]}..."
+                    logger.debug(
+                        f"[GrokVideo] 调用 API attempt={attempt + 1}/{self.max_retries + 1}"
                     )
                     return await _request_once()
                 except Exception as e:
@@ -638,14 +635,14 @@ class DoubaoSeedanceService:
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                logger.info(f"[DoubaoVideo] 创建任务 attempt={attempt + 1}")
+                logger.debug(f"[DoubaoVideo] 创建任务 attempt={attempt + 1}")
                 async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                     resp = await client.post(self.create_task_url, json=payload, headers=headers)
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
                 task_id = resp.json().get("id")
                 if not task_id: raise RuntimeError("响应中无 task id")
-                logger.info(f"[DoubaoVideo] 任务创建: {task_id}")
+                logger.debug(f"[DoubaoVideo] 任务创建: {task_id}")
                 return task_id
             except Exception as e:
                 last_exc = e
@@ -775,14 +772,13 @@ class GrokVideo3AsyncService:
             files_payload = [
                 ("input_reference", (f"reference{ext}", image_bytes, mime))
             ]
-            logger.info(
-                "[GrokVideo3] 附带参考图文件: 原始=%s bytes, 压缩后=%s bytes, mime=%s",
+            logger.debug(
+                "[GrokVideo3] 附带参考图: 原始=%s bytes, 压缩后=%s bytes",
                 original_bytes_size,
                 len(image_bytes),
-                mime,
             )
         else:
-            logger.info("[GrokVideo3] 无参考图，纯文生视频模式")
+            logger.debug("[GrokVideo3] 无参考图，纯文生视频模式")
 
         # 注意：multipart 请求不要手动设置 Content-Type，httpx 会自动加上 boundary
         headers = {
@@ -794,11 +790,10 @@ class GrokVideo3AsyncService:
         last_exc: Exception | None = None
         for attempt in range(self.retry_delay + 1 if self.retry_delay > 0 else 1):
             try:
-                logger.info(
-                    "[GrokVideo3] 创建任务 attempt=%s, model=%s, prompt=%s...",
+                logger.debug(
+                    "[GrokVideo3] 创建任务 attempt=%s, model=%s",
                     attempt + 1,
                     self.model,
-                    prompt[:60],
                 )
                 async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                     resp = await client.post(
@@ -815,7 +810,7 @@ class GrokVideo3AsyncService:
                 task_id = result.get("task_id") or result.get("id")
                 if not task_id:
                     raise RuntimeError(f"响应中无 task_id/id: {str(result)[:200]}")
-                logger.info(f"[GrokVideo3] 任务创建: {task_id}")
+                logger.debug(f"[GrokVideo3] 任务创建: {task_id}")
                 return await self._poll_task_result(task_id, headers=headers, timeout=timeout)
             except Exception as e:
                 last_exc = e
@@ -866,7 +861,7 @@ class GrokVideo3AsyncService:
                     # 深度搜索兜底
                     video_url = _deep_find_video_url(q_data)
                 if video_url:
-                    logger.info(f"[GrokVideo3] 任务完成: {task_id}")
+                    logger.debug(f"[GrokVideo3] 任务完成: {task_id}")
                     return str(video_url)
                 raise RuntimeError(f"任务完成但无 video_url: {str(q_data)[:200]}")
             elif status_lower in ("failed", "cancelled", "error"):
@@ -880,7 +875,7 @@ class GrokVideo3AsyncService:
                 raise RuntimeError(f"任务失败 ({status}): {error_msg}")
             else:  # queued / processing / SUCCESS(大写未完成) 等
                 if int(time.perf_counter() - t_start) % 60 < self.polling_interval:
-                    logger.info(
+                    logger.debug(
                         f"[GrokVideo3] 轮询中: task={task_id}, status={status}, "
                         f"已等待 {int(time.perf_counter() - t_start)}s"
                     )
@@ -956,16 +951,14 @@ class OfficialGrokVideoService:
             image_bytes = _compress_image_bytes_for_video(image_bytes)
             if not image_url or not image_url.startswith(("http://", "https://")):
                 image_url = _build_data_url(image_bytes)
-                logger.info(
-                    "[OfficialGrok] image_url 非远程链接，已从 image_bytes 构建 data URL: "
-                    "原始=%s bytes, 压缩后=%s bytes, data URL 长度=%s",
+                logger.debug(
+                    "[OfficialGrok] 从 image_bytes 构建 data URL: 原始=%s bytes, 压缩后=%s bytes",
                     original_bytes_size,
                     len(image_bytes),
-                    len(image_url),
                 )
             else:
-                logger.info(
-                    "[OfficialGrok] 图片已压缩: %s -> %s bytes, 使用传入的 image_url",
+                logger.debug(
+                    "[OfficialGrok] 图片已压缩: %s -> %s bytes",
                     original_bytes_size,
                     len(image_bytes),
                 )

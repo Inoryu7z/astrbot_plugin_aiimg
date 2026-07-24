@@ -200,16 +200,13 @@ async def _fetch_reply_message_images(
     if callable(extract_quoted_message_images):
         try:
             refs = await extract_quoted_message_images(event, reply_seg)
-        except Exception as e:
-            logger.debug(f"[get_images] quoted parser fallback failed: {e}")
+        except Exception:
+            pass
         else:
             images = [
                 image for ref in refs for image in [_image_from_ref(ref)] if image is not None
             ]
             if images:
-                logger.debug(
-                    f"[get_images] fetched {len(images)} image(s) from quoted parser"
-                )
                 return images
 
     reply_id = getattr(reply_seg, "id", None)
@@ -231,8 +228,6 @@ async def _fetch_reply_message_images(
         if isinstance(comp, Image):
             images.append(comp)
 
-    if images:
-        logger.debug(f"[get_images] fetched {len(images)} image(s) from reply id={reply_id}")
     return images
 
 
@@ -248,10 +243,6 @@ async def get_images_from_event(
         chain = list(event.get_messages() or [])
     except Exception:
         chain = []
-
-    logger.debug(
-        f"[get_images] chain_len={len(chain)}, types={[type(seg).__name__ for seg in chain]}"
-    )
 
     self_id = ""
     if hasattr(event, "get_self_id"):
@@ -276,7 +267,6 @@ async def get_images_from_event(
             if isinstance(chain_item, Image):
                 image_segs.append(chain_item)
                 found_in_reply = True
-                logger.debug("[get_images] image from reply.chain")
 
         if found_in_reply:
             continue
@@ -288,11 +278,6 @@ async def get_images_from_event(
     for seg in chain:
         if isinstance(seg, Image):
             image_segs.append(seg)
-            logger.debug(
-                f"[get_images] image from current message url={getattr(seg, 'url', 'N/A')[:50] if getattr(seg, 'url', None) else 'N/A'}"
-            )
-
-    logger.debug(f"[get_images] image_count={len(image_segs)}, at_users={at_user_ids}")
 
     if include_avatar:
         if at_user_ids:
@@ -301,7 +286,6 @@ async def get_images_from_event(
                 if avatar_bytes:
                     b64 = base64.b64encode(avatar_bytes).decode()
                     image_segs.append(Image.fromBase64(b64))
-                    logger.debug(f"[get_images] avatar loaded for @{uid}")
         elif include_sender_avatar_fallback and not image_segs:
             sender_id = event.get_sender_id()
             if sender_id:
@@ -309,7 +293,5 @@ async def get_images_from_event(
                 if avatar_bytes:
                     b64 = base64.b64encode(avatar_bytes).decode()
                     image_segs.append(Image.fromBase64(b64))
-                    logger.debug(f"[get_images] sender avatar fallback loaded: {sender_id}")
 
-    logger.debug(f"[get_images] final_count={len(image_segs)}")
     return image_segs

@@ -168,6 +168,6 @@ class NanoBananaService:
             raise first_error
 
         if first_error:
-            logger.warning(f"[NanoBanana] partial failure: {first_error}")
+            logger.warning(f"[NanoBanana] 部分失败: {first_error}")
 
         return paths

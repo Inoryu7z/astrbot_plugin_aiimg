@@ -278,7 +278,7 @@ class GeminiEditBackend:
         texts = self._collect_text_parts(data)
         text_b64_images = self._extract_data_uri_images_from_texts(texts)
         if text_b64_images:
-            logger.info(
+            logger.debug(
                 "[Gemini] inlineData missing, recovered %s image(s) from text data-uri",
                 len(text_b64_images),
             )
@@ -294,7 +294,7 @@ class GeminiEditBackend:
             try:
                 img_bytes = await self._download_image_bytes(url)
                 downloaded.append(img_bytes)
-                logger.info(
+                logger.debug(
                     "[Gemini] inlineData missing, recovered image from url #%s: %s",
                     idx,
                     url[:120],
@@ -570,7 +570,7 @@ class GeminiEditBackend:
             ).strip()
             or "4K"
         )
-        logger.info(
+        logger.debug(
             f"[Gemini] 开始改图: model={self.model}, "
             f"resolution={final_resolution}, images={len(images)}"
         )
@@ -610,7 +610,7 @@ class GeminiEditBackend:
 
         # 取最后一张图（第一张可能是低分辨率预览）
         result_bytes = all_images[-1]
-        logger.info(
+        logger.debug(
             f"[Gemini] 收到 {len(all_images)} 张图片, "
             f"使用最后一张 ({len(result_bytes)} bytes)"
         )
