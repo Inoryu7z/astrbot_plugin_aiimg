@@ -1,3 +1,15 @@
+### v1.9.4
+
+**🖼️ 新增 Ark Seedream 专用后端（修复 Seedream 5.0 pro 改图 HTTP 400）**
+
+*   新增 ByteDance ARK Seedream 系列专用后端 `ArkSeedreamBackend`，模板 key 为 `ark_seedream`
+*   修复 Seedream 5.0 pro 改图时因自动注入 `sequential_image_generation: "disabled"` 参数导致的 HTTP 400 错误（该模型不支持此参数，即使值为 `"disabled"` 也会被拒绝）
+*   新后端继承自 `OpenAIFullURLBackend`，行为与 OpenAI ImagesURL 后端完全一致（json_image_array 改图模式、image 字段格式、重试、超时、watermark=False 等），唯一区别是改图时永不发送 `sequential_image_generation` 参数
+*   配置项与 OpenAI ImagesURL 一致：`full_generate_url` / `full_edit_url` / `api_keys` / `model` / `supports_edit` / `default_size` / `extra_body` 等
+*   旧 `openai_full_url_images` 模板保持原样不动，不影响现有用户
+
+---
+
 ### v1.9.3
 
 **🔍 /补拍debug 命令 + 提供商名显示**
