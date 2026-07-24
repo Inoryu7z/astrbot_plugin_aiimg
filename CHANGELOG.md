@@ -1,14 +1,3 @@
-### v1.10.0
-
-🔗 联动：为 wardrobe 插件提供 AI 生成图提示词
-
-* `_remember_last_image` 新增 `prompt` 参数，将生成图片时使用的提示词写入 `_last_image_by_user` 的 entry
-* 文生图、改图、自拍、LLM 工具生成 共 6 处调用点全部透传 prompt
-* wardrobe 插件自动存图时从 entry 读取 `prompt` 字段并入库（仅 selfie 模式触发自动存图）
-* 与 wardrobe v2.10.0 配合使用
-
----
-
 ### v1.9.5
 
 **🎯 新增 /补拍 命令（单提供商立即补拍）+ 删除旧 /补画 命令**
