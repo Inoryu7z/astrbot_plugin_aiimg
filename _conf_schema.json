@@ -1072,6 +1072,79 @@
           }
         }
       },
+      "ark_seedream": {
+        "name": "Ark Seedream",
+        "description": "ByteDance ARK Seedream 系列专用（Seedream 5.0 pro 等）。",
+        "hint": "与 OpenAI ImagesURL 行为一致，但改图时不会发送 sequential_image_generation 参数（Seedream 5.0 pro 不支持）。full_generate_url/full_edit_url 需填写完整 URL（含路径）。",
+        "items": {
+          "id": {
+            "type": "string",
+            "description": "服务商 ID（唯一）",
+            "default": "ark_seedream"
+          },
+          "label": {
+            "type": "string",
+            "description": "显示名称（可选）",
+            "default": ""
+          },
+          "full_generate_url": {
+            "type": "string",
+            "description": "完整文生图 URL",
+            "hint": "必须填写完整 endpoint（例如 https://ark.cn-beijing.volces.com/api/v3/images/generations），不是 base_url。",
+            "default": ""
+          },
+          "full_edit_url": {
+            "type": "string",
+            "description": "完整改图 URL（可选）",
+            "hint": "可留空；留空时改图将复用上方完整文生图 URL。若服务商改图路径不同，请填完整路径（例如 .../api/v3/images/edits）。",
+            "default": ""
+          },
+          "api_keys": {
+            "type": "list",
+            "description": "API Key 池",
+            "default": [],
+            "obvious_hint": true
+          },
+          "model": {
+            "type": "string",
+            "description": "模型名称",
+            "hint": "例如 doubao-seedream-1-0-pro-250828 或接入点 ep-xxx。",
+            "default": ""
+          },
+          "supports_edit": {
+            "type": "bool",
+            "description": "支持改图 (images.edit)",
+            "default": true
+          },
+          "timeout": {
+            "type": "int",
+            "description": "超时(秒)",
+            "default": 120
+          },
+          "max_retries": {
+            "type": "int",
+            "description": "最大重试次数",
+            "default": 2
+          },
+          "default_size": {
+            "type": "string",
+            "description": "默认输出尺寸",
+            "default": "4096x4096"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "额外请求体（高级）",
+            "items": {},
+            "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
+          }
+        }
+      },
       "openai_chat": {
         "name": "OpenAI Chat图",
         "description": "用于 Chat 回复图片（markdown/data:image/URL）的网关。",
