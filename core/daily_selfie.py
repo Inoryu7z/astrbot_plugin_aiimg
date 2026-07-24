@@ -1008,7 +1008,7 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s r0算法选风格未返回结果", persona_name)
             return 0, 0
         if not scenes:
-            logger.warning("[DailySelfie] 人格 %s 第1轮(场景)未返回结果", persona_name)
+            logger.warning("[DailySelfie] 人格 %s r1场景未返回结果", persona_name)
             return 0, 0
 
         pair_count = min(len(styles), len(scenes))
@@ -1016,7 +1016,7 @@ class DailySelfieService:
         scenes = scenes[:pair_count]
 
         logger.info(
-            "[DailySelfie] 人格 %s r0算法选风格返回 %d 条，第1轮返回 %d 条场景，配对 %d 组",
+            "[DailySelfie] 人格 %s r0算法选风格返回 %d 条，r1场景返回 %d 条场景，配对 %d 组",
             persona_name, len(styles), len(scenes), pair_count,
         )
 
@@ -1064,7 +1064,7 @@ class DailySelfieService:
         prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona)
         reviewer_system_prompt = self._get_reviewer_system_prompt(persona)
 
-        batch_size = 3
+        batch_size = 2
         all_designs: list[dict] = []
         all_ref_by_design: list[dict | None] = []
 
@@ -1079,12 +1079,12 @@ class DailySelfieService:
             non_empty_refs = [d for d in batch_refs_desc if d]
 
             logger.info(
-                "[DailySelfie] 人格 %s 第2轮批次 %d/%d：创意设计 %d 组",
+                "[DailySelfie] 人格 %s r2设计 批次 %d/%d：创意设计 %d 组",
                 persona_name, batch_num, total_batches, len(batch_styles),
             )
             self._record_debug(
                 "INFO",
-                f"第2轮批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
+                f"r2设计 批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
             )
 
             designs = await self._llm_round2_design(
@@ -1108,7 +1108,7 @@ class DailySelfieService:
                 )
                 if estimated_start >= deadline_dt:
                     logger.warning(
-                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，"
+                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
                         "预计延迟重试开始时间 %s 已到/过当日截止线 %s，终止重试",
                         persona_name, batch_num, total_batches,
                         estimated_start.strftime("%H:%M:%S"),
@@ -1116,14 +1116,14 @@ class DailySelfieService:
                     )
                     self._record_debug(
                         "WARN",
-                        f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，"
+                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
                         f"预计延迟重试开始时间 {estimated_start.strftime('%H:%M:%S')} "
                         f"已到/过当日截止线 {deadline_dt.strftime('%H:%M:%S')}，终止重试",
                     )
                     break
 
                 logger.warning(
-                    "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，"
+                    "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
                     "%d 分钟后进行第 %d 次延迟重试（预计开始: %s）",
                     persona_name, batch_num, total_batches,
                     DESIGN_RETRY_DELAY_SECONDS // 60, retry_attempt + 1,
@@ -1131,7 +1131,7 @@ class DailySelfieService:
                 )
                 self._record_debug(
                     "WARN",
-                    f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，"
+                    f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
                     f"{DESIGN_RETRY_DELAY_SECONDS // 60} 分钟后进行第 {retry_attempt + 1} 次延迟重试"
                     f"（预计开始: {estimated_start.strftime('%H:%M:%S')}）",
                 )
@@ -1146,21 +1146,21 @@ class DailySelfieService:
             if designs is None:
                 if retry_attempt > 0:
                     logger.warning(
-                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
+                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
                         persona_name, batch_num, total_batches, retry_attempt,
                     )
                     self._record_debug(
                         "WARN",
-                        f"第2轮批次 {batch_num}/{total_batches} 创意设计在 {retry_attempt} 次延迟重试后仍失败，跳过",
+                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计在 {retry_attempt} 次延迟重试后仍失败，跳过",
                     )
                 else:
                     logger.warning(
-                        "[DailySelfie] 人格 %s 第2轮批次 %d/%d 创意设计失败，跳过",
+                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，跳过",
                         persona_name, batch_num, total_batches,
                     )
                     self._record_debug(
                         "WARN",
-                        f"第2轮批次 {batch_num}/{total_batches} 创意设计失败，跳过",
+                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，跳过",
                     )
                 continue
 
@@ -1181,7 +1181,7 @@ class DailySelfieService:
 
         all_prompts: list[tuple[str, dict | None]] = []
 
-        design_batch_size = 3
+        design_batch_size = 2
         design_total_batches = (len(all_designs) + design_batch_size - 1) // design_batch_size
 
         for batch_num, batch_start in enumerate(range(0, len(all_designs), design_batch_size), 1):
@@ -1190,7 +1190,7 @@ class DailySelfieService:
 
             prompts = await self._llm_round4_prompt(batch_designs, prompt_engineer_provider_id, system_prompt=prompt_engineer_system_prompt)
             logger.info(
-                "[DailySelfie] 人格 %s 第4轮批次 %d/%d 返回 %d 条提示词",
+                "[DailySelfie] 人格 %s r4提示词 批次 %d/%d 返回 %d 条提示词",
                 persona_name, batch_num, design_total_batches, len(prompts),
             )
 
@@ -1549,14 +1549,14 @@ class DailySelfieService:
                     break
             except asyncio.TimeoutError:
                 logger.warning(
-                    "[DailySelfie] 人格 %s 生成空间配文超时(第%d次)", persona_name, attempt + 1
+                    "[DailySelfie] 人格 %s 生成空间配文超时(重试%d/2)", persona_name, attempt + 1
                 )
                 if attempt == 0:
                     logger.info("[DailySelfie] 人格 %s 将重试一次", persona_name)
                     continue
             except Exception as e:
                 logger.warning(
-                    "[DailySelfie] 人格 %s 生成空间配文失败(第%d次): %s", persona_name, attempt + 1, e
+                    "[DailySelfie] 人格 %s 生成空间配文失败(重试%d/2): %s", persona_name, attempt + 1, e
                 )
                 if attempt == 0:
                     logger.info("[DailySelfie] 人格 %s 将重试一次", persona_name)
@@ -1678,7 +1678,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round1-Scene] chat_provider_id=%s\n"
+                "[DailySelfie][DEBUG][r1-Scene] chat_provider_id=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 chat_provider_id, system_prompt, user_prompt,
@@ -1697,42 +1697,42 @@ class DailySelfieService:
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
-                    logger.warning("[DailySelfie] LLM第1轮(场景)返回空文本(第%d次)", attempt + 1)
+                    logger.warning("[DailySelfie] r1场景返回空文本(重试%d/2)", attempt + 1)
                     if attempt == 0:
-                        logger.info("[DailySelfie] LLM第1轮(场景)返回空，重试一次")
+                        logger.info("[DailySelfie] r1场景返回空，重试一次")
                         continue
                     return []
 
                 if self._is_debug():
                     logger.info(
-                        "[DailySelfie][DEBUG][Round1-Scene] === LLM response ===\n%s",
+                        "[DailySelfie][DEBUG][r1-Scene] === LLM response ===\n%s",
                         text,
                     )
 
                 parsed = _parse_llm_lines(text, count)
                 if len(parsed) < count and attempt == 0:
                     logger.warning(
-                        "[DailySelfie] LLM第1轮(场景)返回 %d 条（期望 %d 条），重试一次",
+                        "[DailySelfie] r1场景返回 %d 条（期望 %d 条），重试一次",
                         len(parsed), count,
                     )
                     continue
                 if len(parsed) < count:
                     logger.warning(
-                        "[DailySelfie] LLM第1轮(场景)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        "[DailySelfie] r1场景重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
                         len(parsed), count,
                     )
                 return parsed
             except asyncio.TimeoutError:
-                logger.error("[DailySelfie] LLM第1轮(场景)调用超时(360s)(第%d次)", attempt + 1)
-                self._record_debug("ERROR", f"LLM第1轮(场景)调用超时(360s)(第{attempt + 1}次)")
+                logger.error("[DailySelfie] r1场景调用超时(360s)(重试%d/2)", attempt + 1)
+                self._record_debug("ERROR", f"r1场景调用超时(360s)(重试{attempt + 1}/2)")
                 if attempt == 0:
-                    logger.info("[DailySelfie] LLM第1轮(场景)超时，重试一次")
+                    logger.info("[DailySelfie] r1场景超时，重试一次")
                     continue
                 return []
             except Exception as e:
-                logger.error("[DailySelfie] LLM第1轮(场景)调用失败(第%d次): %s", attempt + 1, e)
+                logger.error("[DailySelfie] r1场景调用失败(重试%d/2): %s", attempt + 1, e)
                 if attempt == 0:
-                    logger.info("[DailySelfie] LLM第1轮(场景)异常，重试一次")
+                    logger.info("[DailySelfie] r1场景异常，重试一次")
                     continue
                 return []
         return []
@@ -1763,7 +1763,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round2-Design] provider=%s\n"
+                "[DailySelfie][DEBUG][r2-Design] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 costume_provider_id, effective_prompt, user_prompt,
@@ -1782,14 +1782,14 @@ class DailySelfieService:
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
-                        "[DailySelfie] 第2轮(创意设计)返回空文本(第%d次)",
+                        "[DailySelfie] r2设计返回空文本(重试%d/2)",
                         attempt + 1,
                     )
                     continue
 
                 if self._is_debug():
                     logger.info(
-                        "[DailySelfie][DEBUG][Round2-Design] === response ===\n%s",
+                        "[DailySelfie][DEBUG][r2-Design] === response ===\n%s",
                         text,
                     )
 
@@ -1797,14 +1797,14 @@ class DailySelfieService:
                 if designs is not None:
                     return designs
                 logger.warning(
-                    "[DailySelfie] 第2轮(创意设计) JSON 解析失败(第%d次)，原始文本: %s",
+                    "[DailySelfie] r2设计 JSON 解析失败(重试%d/2)，原始文本: %s",
                     attempt + 1, text[:200],
                 )
             except asyncio.TimeoutError:
-                logger.warning("[DailySelfie] 第2轮(创意设计)调用超时(第%d次)", attempt + 1)
-                self._record_debug("WARN", f"第2轮(创意设计)调用超时(第{attempt + 1}次)")
+                logger.warning("[DailySelfie] r2设计调用超时(重试%d/2)", attempt + 1)
+                self._record_debug("WARN", f"r2设计调用超时(重试{attempt + 1}/2)")
             except Exception as e:
-                logger.warning("[DailySelfie] 第2轮(创意设计)调用失败(第%d次): %s", attempt + 1, e)
+                logger.warning("[DailySelfie] r2设计调用失败(重试%d/2): %s", attempt + 1, e)
 
         return None
 
@@ -1847,7 +1847,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round3-Review] provider=%s\n"
+                "[DailySelfie][DEBUG][r3-Review] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 chat_provider_id, effective_prompt, user_prompt,
@@ -1866,14 +1866,14 @@ class DailySelfieService:
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
-                        "[DailySelfie] 第3轮(审核)返回空文本(第%d次)",
+                        "[DailySelfie] r3审核返回空文本(重试%d/2)",
                         attempt + 1,
                     )
                     continue
 
                 if self._is_debug():
                     logger.info(
-                        "[DailySelfie][DEBUG][Round3-Review] === response ===\n%s",
+                        "[DailySelfie][DEBUG][r3-Review] === response ===\n%s",
                         text,
                     )
 
@@ -1881,14 +1881,14 @@ class DailySelfieService:
                 if reviews is not None:
                     return self._apply_reviews(designs, reviews)
                 logger.warning(
-                    "[DailySelfie] 第3轮(审核) JSON 解析失败(第%d次)，原始文本: %s",
+                    "[DailySelfie] r3审核 JSON 解析失败(重试%d/2)，原始文本: %s",
                     attempt + 1, text[:200],
                 )
             except asyncio.TimeoutError:
-                logger.warning("[DailySelfie] 第3轮(审核)调用超时(第%d次)", attempt + 1)
-                self._record_debug("WARN", f"第3轮(审核)调用超时(第{attempt + 1}次)")
+                logger.warning("[DailySelfie] r3审核调用超时(重试%d/2)", attempt + 1)
+                self._record_debug("WARN", f"r3审核调用超时(重试{attempt + 1}/2)")
             except Exception as e:
-                logger.warning("[DailySelfie] 第3轮(审核)调用失败(第%d次): %s", attempt + 1, e)
+                logger.warning("[DailySelfie] r3审核调用失败(重试%d/2): %s", attempt + 1, e)
 
         logger.warning("[DailySelfie] r3审核整体失败，返回原始设计方案")
         return designs
@@ -1948,8 +1948,7 @@ class DailySelfieService:
 
         return valid if valid else None
 
-    @staticmethod
-    def _apply_reviews(designs: list[dict], reviews: list[dict]) -> list[dict]:
+    def _apply_reviews(self, designs: list[dict], reviews: list[dict]) -> list[dict]:
         """根据审核结果生成最终设计方案。"""
         final: list[dict] = []
         for i, design in enumerate(designs):
@@ -2006,7 +2005,7 @@ class DailySelfieService:
 
         if self._is_debug():
             logger.info(
-                "[DailySelfie][DEBUG][Round4-Prompt] provider=%s\n"
+                "[DailySelfie][DEBUG][r4-Prompt] provider=%s\n"
                 "=== system_prompt ===\n%s\n"
                 "=== user_prompt ===\n%s",
                 chat_provider_id, effective_prompt, user_prompt,
@@ -2026,36 +2025,36 @@ class DailySelfieService:
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
-                    logger.warning("[DailySelfie] 第4轮(提示词构建)返回空文本(第%d次)", attempt + 1)
+                    logger.warning("[DailySelfie] r4提示词返回空文本(重试%d/2)", attempt + 1)
                     if attempt == 0:
-                        logger.info("[DailySelfie] 第4轮(提示词构建)返回空，重试一次")
+                        logger.info("[DailySelfie] r4提示词返回空，重试一次")
                         continue
                     return []
 
                 parsed = _parse_llm_lines(text, expected)
                 if len(parsed) < expected and attempt == 0:
                     logger.warning(
-                        "[DailySelfie] 第4轮(提示词构建)返回 %d 条（期望 %d 条），重试一次",
+                        "[DailySelfie] r4提示词返回 %d 条（期望 %d 条），重试一次",
                         len(parsed), expected,
                     )
                     continue
                 if len(parsed) < expected:
                     logger.warning(
-                        "[DailySelfie] 第4轮(提示词构建)重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
+                        "[DailySelfie] r4提示词重试后仍返回 %d 条（期望 %d 条），按实际返回处理",
                         len(parsed), expected,
                     )
                 return parsed
             except asyncio.TimeoutError:
-                logger.error("[DailySelfie] 第4轮(提示词构建)调用超时(360s)(第%d次)", attempt + 1)
-                self._record_debug("ERROR", f"第4轮(提示词构建)调用超时(360s)(第{attempt + 1}次)")
+                logger.error("[DailySelfie] r4提示词调用超时(360s)(重试%d/2)", attempt + 1)
+                self._record_debug("ERROR", f"r4提示词调用超时(360s)(重试{attempt + 1}/2)")
                 if attempt == 0:
-                    logger.info("[DailySelfie] 第4轮(提示词构建)超时，重试一次")
+                    logger.info("[DailySelfie] r4提示词超时，重试一次")
                     continue
                 return []
             except Exception as e:
-                logger.error("[DailySelfie] 第4轮(提示词构建)调用失败(第%d次): %s", attempt + 1, e)
+                logger.error("[DailySelfie] r4提示词调用失败(重试%d/2): %s", attempt + 1, e)
                 if attempt == 0:
-                    logger.info("[DailySelfie] 第4轮(提示词构建)异常，重试一次")
+                    logger.info("[DailySelfie] r4提示词异常，重试一次")
                     continue
                 return []
         return []
