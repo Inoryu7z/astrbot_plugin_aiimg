@@ -3121,6 +3121,21 @@ class GiteeAIImagePlugin(Star):
             return conf
         return None
 
+    def _get_provider_edit_size(self, provider_id: str) -> str:
+        """获取 provider 的图生图默认尺寸（default_edit_size 优先于 default_size）。
+
+        补拍场景下，provider 自己配的尺寸优先于人格 default_output。
+        """
+        if not self.edit or not self.edit.registry:
+            return ""
+        conf = self.edit.registry.get(provider_id)
+        if not conf:
+            return ""
+        edit_size = str(conf.get("default_edit_size") or "").strip()
+        if edit_size:
+            return edit_size
+        return str(conf.get("default_size") or "").strip()
+
     async def _generate_selfie_image(
             self,
             event: AstrMessageEvent,
@@ -3297,16 +3312,24 @@ class GiteeAIImagePlugin(Star):
         if provider_id:
             backend_override = provider_id
             chain_override = None
+            # 补拍尺寸优先级：provider 自己的 default_edit_size/default_size > 人格 default_output 兜底
+            # 注意：自拍链路 chain 中的 output override 对补拍不生效（仅对自拍生效）
+            provider_default_size = self._get_provider_edit_size(provider_id)
+            if provider_default_size:
+                persona_default_output = provider_default_size
+            elif persona_conf:
+                persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
+            else:
+                persona_default_output = ""
         else:
             backend_override = None
             chain_override = self._get_persona_selfie_chain(persona_name)
             if not chain_override:
                 logger.warning("[daily_selfie] 人格 %s 未配置自拍链路", persona_name)
                 return None
-
-        persona_default_output = ""
-        if persona_conf:
-            persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
+            persona_default_output = ""
+            if persona_conf:
+                persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
         final_prompt = prompt
 
