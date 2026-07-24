@@ -29,6 +29,9 @@ DESIGN_MAX_RETRY_ATTEMPTS = 2
 DESIGN_RETRY_DEADLINE_HOUR = 23
 DESIGN_RETRY_DEADLINE_MINUTE = 30
 
+# r2→r3→r4 流水线批次错开启动间隔（秒），避免瞬间并发打满 provider
+BATCH_STAGGER_SECONDS = 30
+
 
 def _clean_llm_line(line: str) -> str:
     line = line.strip()
@@ -1065,138 +1068,44 @@ class DailySelfieService:
         reviewer_system_prompt = self._get_reviewer_system_prompt(persona)
 
         batch_size = 2
-        all_designs: list[dict] = []
-        all_ref_by_design: list[dict | None] = []
-
         total_batches = (pair_count + batch_size - 1) // batch_size
 
+        # r2→r3→r4 流水线：批次错开启动，避免瞬间并发打满 provider
+        # r2 启动错开：主循环 sleep BATCH_STAGGER_SECONDS
+        # r3/r4 启动错开：调度器确保距上次启动至少 BATCH_STAGGER_SECONDS
+        r3_scheduler = {"last_start": None, "lock": asyncio.Lock()}
+        r4_scheduler = {"last_start": None, "lock": asyncio.Lock()}
+
+        batch_tasks: list[asyncio.Task] = []
         for batch_num, batch_start in enumerate(range(0, pair_count, batch_size), 1):
+            if batch_num > 1:
+                logger.info(
+                    "[DailySelfie] 人格 %s 错开 %ds 启动 r2设计 批次 %d/%d",
+                    persona_name, BATCH_STAGGER_SECONDS, batch_num, total_batches,
+                )
+                await asyncio.sleep(BATCH_STAGGER_SECONDS)
+
             batch_styles = styles[batch_start:batch_start + batch_size]
             batch_scenes = scenes[batch_start:batch_start + batch_size]
             batch_refs_desc = ref_descriptions[batch_start:batch_start + batch_size]
             batch_refs = ref_by_index[batch_start:batch_start + batch_size]
 
-            non_empty_refs = [d for d in batch_refs_desc if d]
-
-            logger.info(
-                "[DailySelfie] 人格 %s r2设计 批次 %d/%d：创意设计 %d 组",
-                persona_name, batch_num, total_batches, len(batch_styles),
-            )
-            self._record_debug(
-                "INFO",
-                f"r2设计 批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
-            )
-
-            designs = await self._llm_round2_design(
-                designer_provider_id, batch_styles, batch_scenes,
-                ref_descriptions=non_empty_refs if non_empty_refs else None,
-                system_prompt=costume_system_prompt,
-            )
-
-            # 设计失败后的延迟重试：每次等待 DESIGN_RETRY_DELAY_SECONDS 后再试，
-            # 最多 DESIGN_MAX_RETRY_ATTEMPTS 次；若预计重试开始时间已晚于当日
-            # 23:30，则直接终止重试（避免后续生图跨日导致额度计算错乱）。
-            retry_attempt = 0
-            while designs is None and retry_attempt < DESIGN_MAX_RETRY_ATTEMPTS:
-                now_dt = datetime.now()
-                estimated_start = now_dt + timedelta(seconds=DESIGN_RETRY_DELAY_SECONDS)
-                deadline_dt = now_dt.replace(
-                    hour=DESIGN_RETRY_DEADLINE_HOUR,
-                    minute=DESIGN_RETRY_DEADLINE_MINUTE,
-                    second=0,
-                    microsecond=0,
-                )
-                if estimated_start >= deadline_dt:
-                    logger.warning(
-                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
-                        "预计延迟重试开始时间 %s 已到/过当日截止线 %s，终止重试",
-                        persona_name, batch_num, total_batches,
-                        estimated_start.strftime("%H:%M:%S"),
-                        deadline_dt.strftime("%H:%M:%S"),
-                    )
-                    self._record_debug(
-                        "WARN",
-                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
-                        f"预计延迟重试开始时间 {estimated_start.strftime('%H:%M:%S')} "
-                        f"已到/过当日截止线 {deadline_dt.strftime('%H:%M:%S')}，终止重试",
-                    )
-                    break
-
-                logger.warning(
-                    "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
-                    "%d 分钟后进行第 %d 次延迟重试（预计开始: %s）",
+            task = asyncio.create_task(
+                self._process_design_batch(
                     persona_name, batch_num, total_batches,
-                    DESIGN_RETRY_DELAY_SECONDS // 60, retry_attempt + 1,
-                    estimated_start.strftime("%H:%M:%S"),
+                    batch_styles, batch_scenes, batch_refs_desc, batch_refs,
+                    designer_provider_id, reviewer_provider_id, prompt_engineer_provider_id,
+                    costume_system_prompt, reviewer_system_prompt, prompt_engineer_system_prompt,
+                    r3_scheduler, r4_scheduler,
                 )
-                self._record_debug(
-                    "WARN",
-                    f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
-                    f"{DESIGN_RETRY_DELAY_SECONDS // 60} 分钟后进行第 {retry_attempt + 1} 次延迟重试"
-                    f"（预计开始: {estimated_start.strftime('%H:%M:%S')}）",
-                )
-                await asyncio.sleep(DESIGN_RETRY_DELAY_SECONDS)
-                retry_attempt += 1
-                designs = await self._llm_round2_design(
-                    designer_provider_id, batch_styles, batch_scenes,
-                    ref_descriptions=non_empty_refs if non_empty_refs else None,
-                    system_prompt=costume_system_prompt,
-                )
-
-            if designs is None:
-                if retry_attempt > 0:
-                    logger.warning(
-                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
-                        persona_name, batch_num, total_batches, retry_attempt,
-                    )
-                    self._record_debug(
-                        "WARN",
-                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计在 {retry_attempt} 次延迟重试后仍失败，跳过",
-                    )
-                else:
-                    logger.warning(
-                        "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，跳过",
-                        persona_name, batch_num, total_batches,
-                    )
-                    self._record_debug(
-                        "WARN",
-                        f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，跳过",
-                    )
-                continue
-
-            # r3: 审核环节，对设计师输出做美学审核并可能给出改进版
-            designs = await self._llm_round3_review(
-                reviewer_provider_id, batch_styles, batch_scenes, designs,
-                system_prompt=reviewer_system_prompt,
             )
+            batch_tasks.append(task)
 
-            actual_count = min(len(designs), len(batch_styles))
-            for i in range(actual_count):
-                all_designs.append(designs[i])
-                all_ref_by_design.append(batch_refs[i] if i < len(batch_refs) else None)
-
-        if not all_designs:
-            logger.warning("[DailySelfie] 人格 %s 未生成任何设计方案，%d 个额度全部计入失败", persona_name, remaining)
-            return 0, remaining
+        batch_results = await asyncio.gather(*batch_tasks)
 
         all_prompts: list[tuple[str, dict | None]] = []
-
-        design_batch_size = 2
-        design_total_batches = (len(all_designs) + design_batch_size - 1) // design_batch_size
-
-        for batch_num, batch_start in enumerate(range(0, len(all_designs), design_batch_size), 1):
-            batch_designs = all_designs[batch_start:batch_start + design_batch_size]
-            batch_refs = all_ref_by_design[batch_start:batch_start + design_batch_size]
-
-            prompts = await self._llm_round4_prompt(batch_designs, prompt_engineer_provider_id, system_prompt=prompt_engineer_system_prompt)
-            logger.info(
-                "[DailySelfie] 人格 %s r4提示词 批次 %d/%d 返回 %d 条提示词",
-                persona_name, batch_num, design_total_batches, len(prompts),
-            )
-
-            for i, prompt in enumerate(prompts):
-                ref = batch_refs[i] if i < len(batch_refs) else None
-                all_prompts.append((prompt.strip(), ref))
+        for prompts_refs in batch_results:
+            all_prompts.extend(prompts_refs)
 
         if not all_prompts:
             logger.warning("[DailySelfie] 人格 %s 未生成任何提示词，%d 个额度全部计入失败", persona_name, remaining)
@@ -1667,6 +1576,158 @@ class DailySelfieService:
         except Exception as e:
             logger.warning("[DailySelfie] 随机抽样失败，回退: %s", e)
             return random.sample(pool, min(k, len(pool)))
+
+    @staticmethod
+    async def _stagger_start(scheduler: dict) -> None:
+        """确保调用之间至少间隔 BATCH_STAGGER_SECONDS 秒。
+
+        锁只在等待期间持有，释放后请求可并发执行——只错开启动，不串行执行。
+        """
+        async with scheduler["lock"]:
+            now = datetime.now()
+            last = scheduler["last_start"]
+            if last is not None:
+                elapsed = (now - last).total_seconds()
+                if elapsed < BATCH_STAGGER_SECONDS:
+                    wait = BATCH_STAGGER_SECONDS - elapsed
+                    logger.info("[DailySelfie] 错开等待 %ds 后启动", int(wait))
+                    await asyncio.sleep(wait)
+            scheduler["last_start"] = datetime.now()
+
+    async def _process_design_batch(
+        self,
+        persona_name: str,
+        batch_num: int,
+        total_batches: int,
+        batch_styles: list[str],
+        batch_scenes: list[str],
+        batch_refs_desc: list[str],
+        batch_refs: list[dict | None],
+        designer_provider_id: str,
+        reviewer_provider_id: str,
+        prompt_engineer_provider_id: str,
+        costume_system_prompt: str,
+        reviewer_system_prompt: str,
+        prompt_engineer_system_prompt: str,
+        r3_scheduler: dict,
+        r4_scheduler: dict,
+    ) -> list[tuple[str, dict | None]]:
+        """处理一个批次的 r2设计→r3审核→r4翻译，返回 [(prompt, ref), ...]。
+
+        流水线模式下每条线独立跑完三步，r4 不等其他批次的 r2/r3 完成。
+        """
+        non_empty_refs = [d for d in batch_refs_desc if d]
+
+        logger.info(
+            "[DailySelfie] 人格 %s r2设计 批次 %d/%d：创意设计 %d 组",
+            persona_name, batch_num, total_batches, len(batch_styles),
+        )
+        self._record_debug(
+            "INFO",
+            f"r2设计 批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
+        )
+
+        # r2 设计
+        designs = await self._llm_round2_design(
+            designer_provider_id, batch_styles, batch_scenes,
+            ref_descriptions=non_empty_refs if non_empty_refs else None,
+            system_prompt=costume_system_prompt,
+        )
+
+        # 设计失败后的延迟重试
+        retry_attempt = 0
+        while designs is None and retry_attempt < DESIGN_MAX_RETRY_ATTEMPTS:
+            now_dt = datetime.now()
+            estimated_start = now_dt + timedelta(seconds=DESIGN_RETRY_DELAY_SECONDS)
+            deadline_dt = now_dt.replace(
+                hour=DESIGN_RETRY_DEADLINE_HOUR,
+                minute=DESIGN_RETRY_DEADLINE_MINUTE,
+                second=0,
+                microsecond=0,
+            )
+            if estimated_start >= deadline_dt:
+                logger.warning(
+                    "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
+                    "预计延迟重试开始时间 %s 已到/过当日截止线 %s，终止重试",
+                    persona_name, batch_num, total_batches,
+                    estimated_start.strftime("%H:%M:%S"),
+                    deadline_dt.strftime("%H:%M:%S"),
+                )
+                self._record_debug(
+                    "WARN",
+                    f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
+                    f"预计延迟重试开始时间 {estimated_start.strftime('%H:%M:%S')} "
+                    f"已到/过当日截止线 {deadline_dt.strftime('%H:%M:%S')}，终止重试",
+                )
+                break
+
+            logger.warning(
+                "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，"
+                "%d 分钟后进行第 %d 次延迟重试（预计开始: %s）",
+                persona_name, batch_num, total_batches,
+                DESIGN_RETRY_DELAY_SECONDS // 60, retry_attempt + 1,
+                estimated_start.strftime("%H:%M:%S"),
+            )
+            self._record_debug(
+                "WARN",
+                f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，"
+                f"{DESIGN_RETRY_DELAY_SECONDS // 60} 分钟后进行第 {retry_attempt + 1} 次延迟重试"
+                f"（预计开始: {estimated_start.strftime('%H:%M:%S')}）",
+            )
+            await asyncio.sleep(DESIGN_RETRY_DELAY_SECONDS)
+            retry_attempt += 1
+            designs = await self._llm_round2_design(
+                designer_provider_id, batch_styles, batch_scenes,
+                ref_descriptions=non_empty_refs if non_empty_refs else None,
+                system_prompt=costume_system_prompt,
+            )
+
+        if designs is None:
+            if retry_attempt > 0:
+                logger.warning(
+                    "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计在 %d 次延迟重试后仍失败，跳过",
+                    persona_name, batch_num, total_batches, retry_attempt,
+                )
+                self._record_debug(
+                    "WARN",
+                    f"r2设计 批次 {batch_num}/{total_batches} 创意设计在 {retry_attempt} 次延迟重试后仍失败，跳过",
+                )
+            else:
+                logger.warning(
+                    "[DailySelfie] 人格 %s r2设计 批次 %d/%d 创意设计失败，跳过",
+                    persona_name, batch_num, total_batches,
+                )
+                self._record_debug(
+                    "WARN",
+                    f"r2设计 批次 {batch_num}/{total_batches} 创意设计失败，跳过",
+                )
+            return []
+
+        # r3 审核（错开启动，避免并发打满 provider）
+        await self._stagger_start(r3_scheduler)
+        designs = await self._llm_round3_review(
+            reviewer_provider_id, batch_styles, batch_scenes, designs,
+            system_prompt=reviewer_system_prompt,
+        )
+
+        # r4 翻译（错开启动）
+        await self._stagger_start(r4_scheduler)
+        prompts = await self._llm_round4_prompt(
+            designs, prompt_engineer_provider_id,
+            system_prompt=prompt_engineer_system_prompt,
+        )
+        logger.info(
+            "[DailySelfie] 人格 %s r4提示词 批次 %d/%d 返回 %d 条提示词",
+            persona_name, batch_num, total_batches, len(prompts),
+        )
+
+        # 组装结果
+        result: list[tuple[str, dict | None]] = []
+        actual_count = min(len(prompts), len(batch_refs))
+        for i in range(actual_count):
+            ref = batch_refs[i] if i < len(batch_refs) else None
+            result.append((prompts[i].strip() if prompts[i] else "", ref))
+        return result
 
     async def _llm_round1_scene(
         self,
