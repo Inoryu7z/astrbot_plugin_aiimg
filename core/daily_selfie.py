@@ -1176,7 +1176,7 @@ class DailySelfieService:
                         )
                         if image_path:
                             logger.debug("[DailySelfie] 人格 %s 重试成功: %s provider=%s", persona_name, image_path, selected_pid)
-                            await self._save_to_wardrobe(image_path, persona_name)
+                            await self._save_to_wardrobe(image_path, persona_name, prompt=prompt_text)
                             provider_success.setdefault(selected_pid, []).append(image_path)
                             success += 1
                             fail -= 1
@@ -1239,7 +1239,7 @@ class DailySelfieService:
             )
             if image_path:
                 logger.info("[DailySelfie] 人格 %s 补画成功: %s", persona_name, image_path)
-                await self._save_to_wardrobe(image_path, persona_name)
+                await self._save_to_wardrobe(image_path, persona_name, prompt=prompt)
                 return image_path
             else:
                 logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
@@ -1259,7 +1259,7 @@ class DailySelfieService:
         selfie_conf = self.plugin._get_feature("selfie")
         return bool(selfie_conf.get("daily_selfie_retry_on_fail", True))
 
-    async def _save_to_wardrobe(self, image_path: Path, persona_name: str) -> None:
+    async def _save_to_wardrobe(self, image_path: Path, persona_name: str, prompt: str = "") -> None:
         wardrobe = self.plugin._get_wardrobe_instance()
         if not wardrobe or not hasattr(wardrobe, "_save_image_from_bytes"):
             return
@@ -1270,7 +1270,7 @@ class DailySelfieService:
             if not image_bytes:
                 return
             image_id, attrs, duplicate = await wardrobe._save_image_from_bytes(
-                image_bytes, persona=persona_name, created_by="daily_selfie",
+                image_bytes, persona=persona_name, created_by="daily_selfie", ai_prompt=prompt or "",
             )
             if duplicate:
                 logger.debug("[DailySelfie] 补画图片已存在于衣橱，跳过: %s", image_id)
