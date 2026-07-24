@@ -678,7 +678,72 @@ class DailySelfieService:
 
         await self._run_personas(personas, umo)
 
-    async def _run_personas(self, personas: list[dict], umo: str = ""):
+    async def run_daily_selfie_single_provider(
+        self, provider_id: str, umo: str = ""
+    ) -> tuple[str, str]:
+        """针对单个 provider 立即补拍。
+
+        用于 /补拍 @provider_id 命令。行为：
+        1. 查找配置了该 provider_id 的启用补画的 persona。
+           注：多人格同时配置同一 provider 的情况按设计不应出现。
+           若真的出现，只取第一个人格补拍，第二个人格忽略（见下方 "多 persona 冲突兜底"）。
+        2. 检查该 persona + provider 今日剩余额度：
+           - 若已耗尽，返回 ("no_quota", ...)，不启动任务。
+           - 若 > 0，启动补拍任务（仅消耗该 provider 的额度，不影响同 persona 下其它 provider）。
+        3. 若该 persona 已有补拍任务正在运行，返回 ("running", ...)，不启动新任务。
+
+        :return: (status, message)
+            status ∈ {"started", "no_quota", "running", "not_found", "no_wardrobe"}
+        """
+        provider_id = str(provider_id or "").strip()
+        if not provider_id:
+            return ("not_found", "未指定提供商 ID")
+
+        personas = self._get_enabled_personas()
+
+        # 多 persona 冲突兜底：按设计不应出现同一 provider 被多个 persona 配置的情况。
+        # 若真的出现，只取第一个人格，第二个人格忽略。
+        matched_persona: dict | None = None
+        for p in personas:
+            for pv in p["providers"]:
+                if pv["provider_id"] == provider_id:
+                    matched_persona = p
+                    break
+            if matched_persona:
+                break
+
+        if not matched_persona:
+            return ("not_found", f"未找到配置了 {provider_id} 提供商的补画人格，请检查配置")
+
+        pname = matched_persona["persona_name"]
+
+        # 检查任务冲突
+        existing = self._selfie_tasks.get(pname)
+        if existing and not existing.done():
+            return ("running", f"人格 {pname} 补拍任务正在运行中，请稍后再试")
+
+        # 预检查衣橱插件（_run_personas 内部也会检查，但那里是静默 return，
+        # 这里提前返回避免误报 started）
+        if not self.plugin._get_wardrobe_instance():
+            return ("no_wardrobe", "衣橱插件不可用，无法补拍")
+
+        # 检查该 provider 今日剩余额度
+        remaining = 0
+        limit = 0
+        for pv in matched_persona["providers"]:
+            if pv["provider_id"] == provider_id:
+                limit = pv["daily_limit"]
+                remaining = await self.counter.get_remaining(pname, provider_id, limit)
+                break
+
+        if remaining <= 0:
+            return ("no_quota", f"人格 {pname} 的 {provider_id} 今日额度已用完（{limit}/{limit}），无需补拍")
+
+        # 启动补拍任务（仅用指定 provider）
+        await self._run_personas([matched_persona], umo, only_pid=provider_id)
+        return ("started", f"已启动人格 {pname} 的 {provider_id} 补拍任务，剩余额度 {remaining} 张")
+
+    async def _run_personas(self, personas: list[dict], umo: str = "", only_pid: str = ""):
         wardrobe = self.plugin._get_wardrobe_instance()
         if not wardrobe:
             logger.warning("[DailySelfie] 衣橱插件不可用，跳过补画")
@@ -692,7 +757,7 @@ class DailySelfieService:
                 logger.warning("[DailySelfie] 人格 %s 补画任务正在运行中，跳过", pname)
                 continue
             task = asyncio.create_task(
-                self._execute_daily_selfie([p], wardrobe, umo)
+                self._execute_daily_selfie([p], wardrobe, umo, only_pid=only_pid)
             )
             self._selfie_tasks[pname] = task
             task.add_done_callback(lambda t, n=pname: self._selfie_tasks.pop(n, None))
@@ -701,7 +766,7 @@ class DailySelfieService:
         if launched:
             logger.info("[DailySelfie] 已启动补画任务: %s", ", ".join(launched))
 
-    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = ""):
+    async def _execute_daily_selfie(self, personas: list[dict], wardrobe: Any, umo: str = "", only_pid: str = ""):
         total_success = 0
         total_fail = 0
         request_interval = 30
@@ -709,8 +774,8 @@ class DailySelfieService:
         debug_mode = self._is_debug()
         selfie_conf = self.plugin._get_feature("selfie")
         logger.info(
-            "[DailySelfie] 补画开始: 人格数=%d debug=%s selfie_conf_keys=%s",
-            len(personas), debug_mode, list(selfie_conf.keys()),
+            "[DailySelfie] 补画开始: 人格数=%d debug=%s only_pid=%s selfie_conf_keys=%s",
+            len(personas), debug_mode, only_pid or "无", list(selfie_conf.keys()),
         )
 
         try:
@@ -719,15 +784,18 @@ class DailySelfieService:
             for p in personas:
                 total_remaining = 0
                 for pv in p["providers"]:
+                    # only_pid 指定时只算该 provider 的剩余额度
+                    if only_pid and pv["provider_id"] != only_pid:
+                        continue
                     total_remaining += await self.counter.get_remaining(p["persona_name"], pv["provider_id"], pv["daily_limit"])
                 if total_remaining <= 0:
-                    logger.info("[DailySelfie] 人格 %s 所有提供商额度已用完，跳过", p["persona_name"])
+                    logger.info("[DailySelfie] 人格 %s 提供商 %s 额度已用完，跳过", p["persona_name"], only_pid or "全部")
                     continue
 
                 style_pool = await self._get_style_pool(wardrobe, p["persona_name"])
 
                 s, f = await self._process_persona_selfie(
-                    p, wardrobe, style_pool, recent_styles, total_remaining, request_interval, umo
+                    p, wardrobe, style_pool, recent_styles, total_remaining, request_interval, umo, only_pid=only_pid
                 )
                 total_success += s
                 total_fail += f
@@ -897,6 +965,7 @@ class DailySelfieService:
         remaining: int,
         request_interval: int,
         umo: str = "",
+        only_pid: str = "",
     ) -> tuple[int, int]:
         persona_name = persona["persona_name"]
         success = 0
@@ -1150,7 +1219,7 @@ class DailySelfieService:
                 ref_image_path = ""
                 ref_strength = ""
 
-            selected_pid = await self._reserve_provider(persona)
+            selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
             if selected_pid is None:
                 logger.info("[DailySelfie] 人格 %s 所有提供商额度用完，停止", persona_name)
                 break
@@ -1203,7 +1272,7 @@ class DailySelfieService:
 
             if retry_enabled:
                 for prompt_text, ref_path, ref_strength in failed_items:
-                    selected_pid = await self._reserve_provider(persona)
+                    selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
                     if selected_pid is None:
                         logger.info("[DailySelfie] 人格 %s 重试时所有提供商额度用完，停止", persona_name)
                         break
@@ -1250,10 +1319,17 @@ class DailySelfieService:
 
         return success, fail
 
-    async def _reserve_provider(self, persona: dict) -> str | None:
+    async def _reserve_provider(self, persona: dict, only_pid: str = "") -> str | None:
+        """预留画图额度。
+
+        :param only_pid: 若指定，则只尝试该 provider_id，不会顺序尝试其它 provider。
+            用于 /补拍 @provider_id 命令——只消耗指定 provider 的额度，不影响同 persona 下其它 provider。
+        """
         pname = persona["persona_name"]
         for pv in persona["providers"]:
             pid = pv["provider_id"]
+            if only_pid and pid != only_pid:
+                continue
             limit = pv["daily_limit"]
             if await self.counter.reserve(pname, pid, limit):
                 logger.debug("[DailySelfie] 预留额度: persona=%s provider=%s limit=%s", pname, pid, limit)

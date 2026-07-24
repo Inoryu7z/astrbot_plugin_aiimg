@@ -77,7 +77,7 @@ class GiteeAIImagePlugin(Star):
     _KNOWN_COMMANDS: set[str] = {
         "aiedit", "改图", "图生图", "修图", "draw", "aiimg",
         "文生图", "生图", "画图", "绘图", "出图", "aidraw",
-        "视频", "video", "自拍", "自拍参考", "补画", "补画状态",
+        "视频", "video", "自拍", "自拍参考", "补拍", "补拍状态",
         "重发图片", "预设列表", "视频预设列表", "改图帮助",
     }
 
@@ -1155,36 +1155,59 @@ class GiteeAIImagePlugin(Star):
 
     # ==================== 每日补画 ====================
 
-    @filter.command("补画")
-    async def daily_selfie_command(self, event: AstrMessageEvent):
-        """手动触发每日补画，自动计算缺口并补画。
+    @filter.command("补拍")
+    async def daily_selfie_single_command(self, event: AstrMessageEvent):
+        """针对单个提供商立即补拍，只消耗该提供商的剩余额度。
 
         用法:
-        - /补画
+        - /补拍 @提供商ID      例：/补拍 @jimeng
+
+        行为:
+        - 查找配置了该提供商的补画人格，立即用该提供商的剩余额度补拍。
+        - 该提供商额度已耗尽时提示并退出，不启动任务。
+        - 该人格已有补拍任务运行时提示并退出。
+        - 不影响同人格下其它提供商的额度。
         """
         event.should_call_llm(True)
         if not hasattr(self, "daily_selfie") or not self.daily_selfie:
-            yield event.plain_result("补画功能未启用。请先在配置中开启人格的每日补画。")
+            yield event.plain_result("补拍功能未启用。请先在配置中开启人格的每日补画。")
             return
-        yield event.plain_result("⏳ 补画任务已启动...")
-        persona_name = await self._get_current_persona_name(event)
-        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
-        await self.daily_selfie.run_daily_selfie(persona_name=persona_name or "", umo=umo)
 
-    @filter.command("补画状态")
+        # 解析 @provider_id（必须带 @）
+        raw = (event.message_str or "").strip()
+        m = re.match(r"@([^\s@]+)", raw)
+        if not m:
+            yield event.plain_result(
+                "用法：/补拍 @提供商ID\n"
+                "示例：/补拍 @jimeng\n"
+                "说明：针对单个提供商立即补拍，只消耗该提供商的剩余额度。"
+            )
+            return
+        provider_id = m.group(1).strip()
+
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        status, message = await self.daily_selfie.run_daily_selfie_single_provider(
+            provider_id, umo=umo
+        )
+        if status == "started":
+            yield event.plain_result(f"⏳ {message}")
+        else:
+            yield event.plain_result(message)
+
+    @filter.command("补拍状态")
     async def daily_selfie_status_command(self, event: AstrMessageEvent):
-        """查看每日补画状态，包括各提供商的已用/剩余额度。
+        """查看每日补拍状态，包括各提供商的已用/剩余额度。
 
         用法:
-        - /补画状态
+        - /补拍状态
         """
         if not hasattr(self, "daily_selfie") or not self.daily_selfie:
-            yield event.plain_result("补画功能未启用。")
+            yield event.plain_result("补拍功能未启用。")
             return
         status = await self.daily_selfie.get_status()
         lines = [f"📅 日期：{status['date']}"]
         if not status["personas"]:
-            lines.append("暂无启用补画的人格。")
+            lines.append("暂无启用补拍的人格。")
         for p in status["personas"]:
             lines.append(f"👤 {p['persona_name']}")
             for pv in p["providers"]:
