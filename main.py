@@ -1174,8 +1174,9 @@ class GiteeAIImagePlugin(Star):
             return
 
         # 解析 @provider_id（必须带 @）
+        # 注：event.message_str 包含命令名本身（如"补拍 @jimeng55"），用 search 而非 match
         raw = (event.message_str or "").strip()
-        m = re.match(r"@([^\s@]+)", raw)
+        m = re.search(r"@([^\s@]+)", raw)
         if not m:
             yield event.plain_result(
                 "用法：/补拍 @提供商ID\n"
