@@ -529,16 +529,15 @@ class GiteeAIImagePlugin(Star):
             return None
 
     def _patch_agent_runner_for_direct_send(self) -> None:
-        """Patch the framework's _handle_function_tools to change the instruction text
+        """Patch the framework's _handle_function_tools to strip the instruction text
         for aiimg tools when images have already been sent directly to users.
 
-        The framework hardcodes "Use send_message_to_user to send it to the user"
-        when a tool returns ImageContent. Since aiimg plugins send the lossless
-        original directly via event.send(), this instruction causes the LLM to
-        send the image again, resulting in duplicate images.
-
-        This patch replaces that instruction with "The image has already been sent
-        directly. Do NOT call send_message_to_user. Please generate a text response."
+        The framework appends "Image returned and cached at path='...'. Review the
+        image below. Use send_message_to_user to send it to the user if satisfied,
+        with type='image' and path='...'." when a tool returns ImageContent. Since
+        aiimg plugins send the lossless original directly via event.send() and
+        include their own Chinese TextContent guidance, this framework instruction
+        is redundant and conflicting. This patch strips it entirely.
         """
         try:
             from astrbot.core.agent.runners.tool_loop_agent_runner import (
@@ -556,15 +555,12 @@ class GiteeAIImagePlugin(Star):
         original_method = ToolLoopAgentRunner._handle_function_tools
 
         _AIIMG_PREFIXES = ("aiimg_",)
-        _ORIGINAL_INSTRUCTION = (
-            "Review the image below. Use send_message_to_user to send it to the user if satisfied, "
-            "with type='image' and path='"
-        )
-        _AIIMG_REPLACEMENT = (
-            "The image has already been sent to the user directly. "
-            "Do NOT call send_message_to_user to send it again. "
-            "Please generate a text response about the image based on what you see. "
-            "Cached at path='"
+        # 匹配框架在 ImageContent 后追加的完整指令文本（含动态 file_path），
+        # 一并移除前缀 "Image returned and cached at path='...'." 与后续指令。
+        _FRAMEWORK_INSTRUCTION_RE = re.compile(
+            r"Image returned and cached at path='[^']+'\.\s*"
+            r"Review the image below\. Use send_message_to_user to send it to the user if satisfied, "
+            r"with type='image' and path='[^']+'\.\s*"
         )
 
         async def _patched_handle_function_tools(self_runner, req, llm_resp):
@@ -584,12 +580,11 @@ class GiteeAIImagePlugin(Star):
                             if (
                                 tc_id in aiimg_tool_call_ids
                                 and isinstance(block.content, str)
-                                and _ORIGINAL_INSTRUCTION in block.content
+                                and _FRAMEWORK_INSTRUCTION_RE.search(block.content)
                             ):
-                                block.content = block.content.replace(
-                                    _ORIGINAL_INSTRUCTION,
-                                    _AIIMG_REPLACEMENT,
-                                )
+                                block.content = _FRAMEWORK_INSTRUCTION_RE.sub(
+                                    "", block.content
+                                ).strip()
                 yield result
 
         ToolLoopAgentRunner._handle_function_tools = _patched_handle_function_tools
@@ -2750,7 +2745,7 @@ class GiteeAIImagePlugin(Star):
                 content=[
                     mcp.types.TextContent(
                         type="text",
-                        text="图片已直接发送给用户，无需再次发送。请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
+                        text="根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。现在用户和你在现在同时看到了这张图片，请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
                     ),
                     mcp.types.ImageContent(
                         type="image",
