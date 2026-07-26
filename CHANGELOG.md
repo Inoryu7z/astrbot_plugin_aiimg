@@ -1,3 +1,14 @@
+### v1.9.6
+
+**🔧 修复 LLM 工具返回信息冲突（统一为单条中文指令）**
+
+*   修复 `aiimg_generate` 等工具返回 ImageContent 时，插件自定义中文 TextContent 与框架追加的英文指令（"Image returned and cached at path='...'. Review the image below. Use send_message_to_user..."）同时出现、语义冲突的问题
+*   将 `_build_llm_tool_image_result` 的 TextContent 更新为统一中文消息："根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。现在用户和你在现在同时看到了这张图片，请根据你看到的图片内容，以符合你人设的口吻生成一段回复。"
+*   改造 `_patch_agent_runner_for_direct_send`：原先仅用子串替换把框架英文指令换成另一段英文，仍与中文 TextContent 冗余；现在改用正则 `Image returned and cached at path='[^']+'\.\s*Review the image below...` 匹配并整段移除框架指令，LLM 最终只看到插件的单一中文消息
+*   注意：框架日志 `Tool aiimg_generate Result: ...` 仍会打印未移除前的原始内容（日志在 patch 运行前输出），但 LLM 实际收到的是移除后的干净内容
+
+---
+
 ### v1.9.5
 
 **🎯 新增 /补拍 命令（单提供商立即补拍）+ 删除旧 /补画 命令**
