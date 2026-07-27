@@ -83,6 +83,15 @@
 
 ---
 
+## 🧩 推荐搭配插件
+
+| 插件 | 作用 |
+|------|------|
+| [`astrbot_plugin_wardrobe`](https://github.com/Inoryu7z/astrbot_plugin_wardrobe) | 衣橱图鉴，与 AiImg 双向联动：自拍时从衣橱检索参考图，生成的图片自动存入衣橱；人格级风格池供补拍选风格使用 |
+| [`astrbot_plugin_silencetool`](https://github.com/Inoryu7z/astrbot_plugin_silencetool) | 静默工具，抑制 LLM 在调用图片生成工具前输出的中间文本（如"好的，我来为你画一张图～"），让用户直接收到图片而不被废话打断节奏 |
+
+---
+
 ## ⚙️ 服务商模板
 
 在配置面板底部添加服务商实例，每个实例需要唯一的 `id`。
