@@ -1023,7 +1023,27 @@ class DailySelfieService:
         if daily_ref_min_sim is not None:
             logger.debug("[DailySelfie] 人格 %s 补拍搜图阈值: %s", persona_name, daily_ref_min_sim)
 
-        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
+        # ark_seedream 单图模式判定：
+        #   - only_pid 指定且为 ark_seedream → 单图模式
+        #   - only_pid 为空且该人格所有 providers 都是 ark_seedream → 单图模式
+        #   - 混合 provider 人格（ark + 非 ark）→ 不跳过搜图，ark 调用在 _generate_daily_selfie_image 里兜底
+        ark_mode = False
+        if only_pid:
+            ark_mode = self.plugin._is_ark_seedream_provider(only_pid)
+        else:
+            _providers = persona.get("providers", []) or []
+            if _providers and all(
+                self.plugin._is_ark_seedream_provider(str(pv.get("provider_id", "") or "").strip())
+                for pv in _providers
+            ):
+                ark_mode = True
+
+        if ark_mode:
+            ref_results = [None] * pair_count
+            logger.debug("[DailySelfie] 人格 %s ark_seedream 单图模式，跳过衣橱搜图", persona_name)
+            self._record_debug("INFO", f"ark_seedream 单图模式，跳过衣橱搜图（persona={persona_name}）")
+        else:
+            ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
 
         ref_by_pair: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):

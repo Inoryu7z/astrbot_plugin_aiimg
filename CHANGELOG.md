@@ -1,3 +1,15 @@
+### v1.9.7
+
+**🎯 Ark Seedream 后端单图模式**
+
+*   补拍链路检测到 provider 是 ark_seedream 时，只传人设参考图 #1，不传衣橱图，不用后两张人设图
+*   新增 `_is_ark_seedream_provider` 方法：按 template_key 查注册表判定后端类型
+*   `_process_persona_selfie` ark_mode 判定：only_pid 是 ark 或人格全部 providers 是 ark 时跳过衣橱搜图
+*   `_generate_daily_selfie_image` 单图模式：只传人设参考图 #1 + 后置正则替换（"前N张参考图" → "参考图"），例 "以前三张参考图的少女" → "以参考图的少女"
+*   混合 provider 人格（ark + 非 ark）在定时任务里仍搜图，ark 调用在生图环节兜底（只传 1 张 + 替换）
+
+---
+
 ### v1.9.6
 
 **🔧 修复 LLM 工具返回信息冲突**

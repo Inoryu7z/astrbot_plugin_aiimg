@@ -3112,6 +3112,27 @@ class GiteeAIImagePlugin(Star):
             return edit_size
         return str(conf.get("default_size") or "").strip()
 
+    def _is_ark_seedream_provider(self, provider_id: str) -> bool:
+        """判断 provider_id 是否为 ark_seedream 后端（按 template_key 查注册表）。
+
+        ark_seedream 后端只能接受 1 张参考图，需走单图模式：
+        只传人设参考图 #1，不传衣橱图，不用后两张人设图，
+        并对 LLM 输出做后置字符串替换（"前N张参考图" → "参考图"）。
+        """
+        pid = str(provider_id or "").strip()
+        if not pid:
+            return False
+        if not self.edit or not self.edit.registry:
+            return False
+        try:
+            conf = self.edit.registry.get(pid)
+            if not isinstance(conf, dict):
+                return False
+            return str(conf.get("__template_key") or "").strip() == "ark_seedream"
+        except Exception as e:
+            logger.debug("[aiimg] _is_ark_seedream_provider(%s) 检查异常: %s", pid, e)
+            return False
+
     async def _generate_selfie_image(
             self,
             event: AstrMessageEvent,
@@ -3272,7 +3293,12 @@ class GiteeAIImagePlugin(Star):
             logger.warning("[daily_selfie] 人格 %s 无参考照", persona_name)
             return None
 
-        if ref_image_path:
+        # ark_seedream 单图模式：只传人设参考图 #1，不传衣橱图，不用后两张人设图
+        is_ark = self._is_ark_seedream_provider(provider_id)
+        if is_ark:
+            ref_paths = [ref_paths[0]]
+            logger.debug("[daily_selfie] 人格 %s ark_seedream 单图模式，仅传人设参考图 #1", persona_name)
+        elif ref_image_path:
             p = Path(ref_image_path)
             if p.exists():
                 ref_paths.append(p)
@@ -3304,7 +3330,12 @@ class GiteeAIImagePlugin(Star):
             if persona_conf:
                 persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
-        final_prompt = prompt
+        # ark 单图模式后置替换：把"前N张参考图"/"前N张人设参考图"统一改为"参考图"
+        # 例："以前三张参考图的少女" → "以参考图的少女"
+        if is_ark:
+            final_prompt = re.sub(r"前[三3两2一1\d]+张(?:人设)?参考图", "参考图", prompt)
+        else:
+            final_prompt = prompt
 
         if provider_id:
             logger.debug(
