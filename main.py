@@ -2745,7 +2745,7 @@ class GiteeAIImagePlugin(Star):
                 content=[
                     mcp.types.TextContent(
                         type="text",
-                        text="根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。现在用户和你在现在同时看到了这张图片，请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
+                        text="根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。此刻你与用户首次同时看到这张刚生成的图片，用户尚未做出任何反应。请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
                     ),
                     mcp.types.ImageContent(
                         type="image",
