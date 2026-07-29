@@ -153,12 +153,14 @@ class EditRouter:
         t_start = time.perf_counter()
 
         for pid, out_override in candidates:
+            logger.info("[edit] 尝试 Provider=%s ...", pid)
+
             try:
                 backend_obj = self.registry.get_backend(pid)
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
-                logger.debug("[edit] Provider=%s build failed: %s", pid, e)
+                logger.info("[edit] Provider=%s 后端构建失败: %s", pid, e)
                 continue
 
             if size or resolution:
@@ -195,8 +197,8 @@ class EditRouter:
                     if not result:
                         raise RuntimeError("Provider returned empty edit result")
                     self.last_success_provider = pid
-                    logger.debug(
-                        "[edit] Provider=%s success in %.2fs",
+                    logger.info(
+                        "[edit] Provider=%s 成功，耗时 %.2fs",
                         pid,
                         time.perf_counter() - t_start,
                     )
@@ -204,8 +206,8 @@ class EditRouter:
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
-                    logger.debug(
-                        "[edit] Provider=%s failed: %s", pid, e
+                    logger.info(
+                        "[edit] Provider=%s 失败: %s", pid, e
                     )
                     if attempt + 1 < max_attempts:
                         await asyncio.sleep(0.5 * (2**attempt))
