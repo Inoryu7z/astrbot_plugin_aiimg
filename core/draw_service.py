@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -94,22 +95,38 @@ class ImageDrawService:
                 final_size = out_size
                 final_res = out_res
 
-            t0 = time.perf_counter()
-            try:
-                gen = getattr(backend, "generate", None)
-                if not callable(gen):
-                    raise RuntimeError("Provider does not support generate()")
-                result = await gen(prompt, size=final_size, resolution=final_res)
-                if not result:
-                    raise RuntimeError("Provider returned empty generate result")
-                logger.info(
-                    "[draw] Provider=%s 成功，耗时 %.2fs", pid, time.perf_counter() - t0
-                )
-                return result
-            except Exception as e:
-                last_error = e
-                last_failed_pid = pid
-                logger.info("[draw] Provider=%s 失败: %s", pid, e)
+            provider_conf = self.registry.get(pid) or {}
+            max_retries = int(provider_conf.get("max_retries") or 0)
+            max_attempts = max(1, max_retries + 1)
+
+            for attempt in range(max_attempts):
+                t0 = time.perf_counter()
+                try:
+                    gen = getattr(backend, "generate", None)
+                    if not callable(gen):
+                        raise RuntimeError("Provider does not support generate()")
+                    result = await gen(prompt, size=final_size, resolution=final_res)
+                    if not result:
+                        raise RuntimeError("Provider returned empty generate result")
+                    logger.info(
+                        "[draw] Provider=%s 成功（第%d/%d次尝试），耗时 %.2fs",
+                        pid, attempt + 1, max_attempts, time.perf_counter() - t0,
+                    )
+                    return result
+                except Exception as e:
+                    last_error = e
+                    last_failed_pid = pid
+                    if attempt + 1 < max_attempts:
+                        logger.info(
+                            "[draw] Provider=%s 第%d次失败: %s，准备重试...",
+                            pid, attempt + 1, e,
+                        )
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+                    else:
+                        logger.info(
+                            "[draw] Provider=%s 第%d次失败（已达上限%d次）: %s",
+                            pid, attempt + 1, max_attempts, e,
+                        )
 
         raise RuntimeError(
             f"Draw failed (last provider: {last_failed_pid}): {last_error}"

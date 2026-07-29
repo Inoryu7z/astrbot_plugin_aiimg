@@ -146,8 +146,6 @@ class EditRouter:
             list(task_types) if list(task_types) else gitee_default_task_types
         )
 
-        max_attempts = 1
-
         last_error: Exception | None = None
         last_failed_pid: str | None = None
         t_start = time.perf_counter()
@@ -172,14 +170,13 @@ class EditRouter:
                 final_size = out_size
                 final_res = out_res
 
+            provider_conf = self.registry.get(pid) or {}
+            max_retries = int(provider_conf.get("max_retries") or 0)
+            max_attempts = max(1, max_retries + 1)
+
             for attempt in range(max_attempts):
                 try:
-                    logger.debug(
-                        "[edit] Provider=%s attempt=%s/%s",
-                        pid,
-                        attempt + 1,
-                        max_attempts,
-                    )
+                    self.last_success_provider = pid
                     edit_fn = getattr(backend_obj, "edit", None)
                     if not callable(edit_fn):
                         raise RuntimeError("Provider does not support edit()")
@@ -196,21 +193,26 @@ class EditRouter:
                         )
                     if not result:
                         raise RuntimeError("Provider returned empty edit result")
-                    self.last_success_provider = pid
                     logger.info(
-                        "[edit] Provider=%s 成功，耗时 %.2fs",
-                        pid,
+                        "[edit] Provider=%s 成功（第%d/%d次尝试），耗时 %.2fs",
+                        pid, attempt + 1, max_attempts,
                         time.perf_counter() - t_start,
                     )
                     return result
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
-                    logger.info(
-                        "[edit] Provider=%s 失败: %s", pid, e
-                    )
                     if attempt + 1 < max_attempts:
-                        await asyncio.sleep(0.5 * (2**attempt))
+                        logger.info(
+                            "[edit] Provider=%s 第%d次失败: %s，准备重试...",
+                            pid, attempt + 1, e,
+                        )
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+                    else:
+                        logger.info(
+                            "[edit] Provider=%s 第%d次失败（已达上限%d次）: %s",
+                            pid, attempt + 1, max_attempts, e,
+                        )
 
         raise RuntimeError(
             f"Edit failed (last provider: {last_failed_pid}): {last_error}"
