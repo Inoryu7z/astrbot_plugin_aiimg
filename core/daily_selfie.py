@@ -1609,6 +1609,30 @@ class DailySelfieService:
         try:
             non_empty_refs = [d for d in batch_refs_desc if d]
 
+            # 提取参考图 URI 供 r2/r3 多模态使用。
+            # 与 non_empty_refs 严格对齐：任一有效描述对应的图片不可用，
+            # 整体回退为 None（纯文本描述），避免图片与描述错位。
+            ref_image_uris: list[str] | None = None
+            if non_empty_refs:
+                uris: list[str] = []
+                aligned = True
+                for desc, ref in zip(batch_refs_desc, batch_refs):
+                    if not desc:
+                        continue
+                    if not ref:
+                        aligned = False
+                        break
+                    img_path = ref.get("image_path", "")
+                    if not img_path:
+                        aligned = False
+                        break
+                    p = Path(img_path)
+                    if not p.exists():
+                        aligned = False
+                        break
+                    uris.append(p.as_uri())
+                ref_image_uris = uris if (aligned and uris) else None
+
             logger.debug(
                 "[DailySelfie] 人格 %s r2设计 批次 %d/%d：创意设计 %d 组",
                 persona_name, batch_num, total_batches, len(batch_styles),
@@ -1618,10 +1642,11 @@ class DailySelfieService:
                 f"r2设计 批次 {batch_num}/{total_batches}：创意设计 {len(batch_styles)} 组",
             )
 
-            # r2 设计
+            # r2 设计（第1次带参考图，失败回退纯文本描述）
             designs = await self._llm_round2_design(
                 designer_provider_id, batch_styles, batch_scenes,
                 ref_descriptions=non_empty_refs if non_empty_refs else None,
+                ref_images=ref_image_uris,
                 system_prompt=costume_system_prompt,
             )
 
@@ -1668,6 +1693,7 @@ class DailySelfieService:
                 designs = await self._llm_round2_design(
                     designer_provider_id, batch_styles, batch_scenes,
                     ref_descriptions=non_empty_refs if non_empty_refs else None,
+                    ref_images=ref_image_uris,
                     system_prompt=costume_system_prompt,
                 )
 
@@ -1692,10 +1718,12 @@ class DailySelfieService:
                     )
                 return (0, 0, {}, [])
 
-            # r3 审核（错开启动，避免并发打满 provider）
+            # r3 审核（错开启动，避免并发打满 provider；第1次带参考图，失败回退纯文本描述）
             await self._stagger_start(r3_scheduler)
             designs = await self._llm_round3_review(
                 reviewer_provider_id, batch_styles, batch_scenes, designs,
+                ref_descriptions=non_empty_refs if non_empty_refs else None,
+                ref_images=ref_image_uris,
                 system_prompt=reviewer_system_prompt,
             )
 
@@ -1873,6 +1901,7 @@ class DailySelfieService:
         styles: list[str],
         scenes: list[str],
         ref_descriptions: list[str] | None = None,
+        ref_images: list[str] | None = None,
         system_prompt: str = "",
     ) -> list[dict] | None:
         style_list = "\n".join(f"- {s}" for s in styles)
@@ -1892,11 +1921,14 @@ class DailySelfieService:
         effective_prompt = system_prompt or _COSTUME_DESIGNER_SYSTEM_PROMPT
 
         for attempt in range(2):
+            # 第1次带参考图（多模态），失败时第2次回退为纯文本描述
+            current_images = ref_images if (ref_images and attempt == 0) else None
             try:
                 resp = await asyncio.wait_for(
                     self.plugin.context.llm_generate(
                         chat_provider_id=costume_provider_id,
                         prompt=user_prompt,
+                        image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
                     timeout=600,
@@ -1904,8 +1936,9 @@ class DailySelfieService:
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
-                        "[DailySelfie] r2设计返回空文本(重试%d/2)",
+                        "[DailySelfie] r2设计返回空文本(重试%d/2)%s",
                         attempt + 1,
+                        "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
                     )
                     continue
 
@@ -1930,6 +1963,8 @@ class DailySelfieService:
         styles: list[str],
         scenes: list[str],
         designs: list[dict],
+        ref_descriptions: list[str] | None = None,
+        ref_images: list[str] | None = None,
         system_prompt: str = "",
     ) -> list[dict]:
         """r3: 审核师审核设计方案，可能返回改进版。
@@ -1953,20 +1988,32 @@ class DailySelfieService:
                 "design": design,
             })
 
+        ref_section = ""
+        if ref_descriptions:
+            ref_section = (
+                "\n\n参考图描述（用户希望设计方案忠实于参考图的服装款式，"
+                "但姿势与构图可重新设计）：\n"
+                + "\n".join(ref_descriptions)
+            )
+
         user_prompt = (
             f"请审查以下 {len(input_data)} 套穿搭方案：\n\n"
-            f"{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\n"
+            f"{json.dumps(input_data, ensure_ascii=False, indent=2)}"
+            f"{ref_section}\n\n"
             f"返回 {len(input_data)} 个审核结果的 JSON 数组。"
         )
 
         effective_prompt = system_prompt or _COSTUME_REVIEWER_SYSTEM_PROMPT
 
         for attempt in range(2):
+            # 第1次带参考图（多模态），失败时第2次回退为纯文本描述
+            current_images = ref_images if (ref_images and attempt == 0) else None
             try:
                 resp = await asyncio.wait_for(
                     self.plugin.context.llm_generate(
                         chat_provider_id=chat_provider_id,
                         prompt=user_prompt,
+                        image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
                     timeout=360,
@@ -1974,8 +2021,9 @@ class DailySelfieService:
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
-                        "[DailySelfie] r3审核返回空文本(重试%d/2)",
+                        "[DailySelfie] r3审核返回空文本(重试%d/2)%s",
                         attempt + 1,
+                        "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
                     )
                     continue
 
