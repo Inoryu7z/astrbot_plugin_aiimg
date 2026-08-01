@@ -2502,6 +2502,7 @@ class GiteeAIImagePlugin(Star):
                 size=size,
             )
             t_end = time.perf_counter()
+            used_pid = self.edit.last_success_provider
 
             self._remember_last_image(event, image_path, prompt=prompt)
             sent = await self._send_image_with_fallback(event, image_path)
@@ -2515,6 +2516,7 @@ class GiteeAIImagePlugin(Star):
 
             # 标记成功
             await mark_success(event)
+            await self._track_edit_quota(used_pid)
             display_name = preset or (prompt[:20] if prompt else "改图")
             logger.info(f"[改图] 完成: {display_name}..., 耗时={t_end - t_start:.2f}s")
 
@@ -2607,6 +2609,7 @@ class GiteeAIImagePlugin(Star):
                 preset=preset,
             )
             t_end = time.perf_counter()
+            used_pid = self.edit.last_success_provider
 
             self._remember_last_image(event, image_path, prompt=prompt)
             sent = await self._send_image_with_fallback(event, image_path)
@@ -2620,6 +2623,7 @@ class GiteeAIImagePlugin(Star):
 
             # 标记成功
             await mark_success(event)
+            await self._track_edit_quota(used_pid)
             display_name = preset or (prompt[:20] if prompt else "改图")
             logger.info(f"[改图] 完成: {display_name}..., 耗时={t_end - t_start:.2f}s")
 
@@ -2851,6 +2855,34 @@ class GiteeAIImagePlugin(Star):
                 break
         except Exception as e:
             logger.warning("[aiimg_generate] 自拍计数失败: %s", e)
+
+    async def _track_edit_quota(self, used_pid: str | None) -> None:
+        """将 /改图 的 provider 用量计入补拍额度计数。
+
+        在所有启用补拍、且配置了 used_pid 的人格上各 +1。用 increment（不阻塞），
+        让 /补拍状态 反映真实占用，避免补拍因看不到手动用量而超支。
+        """
+        if not used_pid:
+            return
+        try:
+            if not hasattr(self, "daily_selfie") or not self.daily_selfie:
+                return
+            personas = self.daily_selfie._get_enabled_personas()
+            if not personas:
+                return
+            for p in personas:
+                for pv in p["providers"]:
+                    if pv.get("provider_id") == used_pid:
+                        await self.daily_selfie.counter.increment(
+                            p["persona_name"], used_pid, 1
+                        )
+                        logger.debug(
+                            "[aiimg] 改图计数+1: persona=%s provider=%s",
+                            p["persona_name"], used_pid,
+                        )
+                        break
+        except Exception as e:
+            logger.warning("[aiimg] 改图计数失败: %s", e)
 
     def _get_selfie_ref_store_key(
             self, event: AstrMessageEvent, persona_name: str | None = None
