@@ -1023,6 +1023,11 @@ class DailySelfieService:
         if daily_ref_min_sim is not None:
             logger.debug("[DailySelfie] 人格 %s 补拍搜图阈值: %s", persona_name, daily_ref_min_sim)
 
+        # cosplay 选中时强制不设阈值，确保能搜到参考图
+        per_query_sim: list[float | None] | None = None
+        if any(s == "cosplay" for s in styles):
+            per_query_sim = [None if s == "cosplay" else daily_ref_min_sim for s in styles]
+
         # ark_seedream 单图模式判定：
         #   - only_pid 指定且为 ark_seedream → 单图模式
         #   - only_pid 为空且该人格所有 providers 都是 ark_seedream → 单图模式
@@ -1043,7 +1048,29 @@ class DailySelfieService:
             logger.debug("[DailySelfie] 人格 %s ark_seedream 单图模式，跳过衣橱搜图", persona_name)
             self._record_debug("INFO", f"ark_seedream 单图模式，跳过衣橱搜图（persona={persona_name}）")
         else:
-            ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim)
+            ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim)
+
+        # cosplay 无参考图 → 从排除 cosplay 的池中换一个风格，用常规阈值重搜1次
+        if not ark_mode:
+            recent_set = set(recent_styles)
+            for i in range(pair_count):
+                if styles[i] == "cosplay" and ref_results[i] is None:
+                    non_cosplay_pool = [s for s in style_pool if s != "cosplay" and s not in recent_set]
+                    if not non_cosplay_pool:
+                        non_cosplay_pool = [s for s in style_pool if s != "cosplay"]
+                    if non_cosplay_pool:
+                        new_style = random.choice(non_cosplay_pool)
+                        new_query = f"{new_style} {scenes[i]}"
+                        logger.debug(
+                            "[DailySelfie] 人格 %s cosplay无参考图，换风格: cosplay→%s",
+                            persona_name, new_style,
+                        )
+                        retry_ref = await self._search_reference_images(
+                            [new_query], wardrobe, persona_name, min_similarity=daily_ref_min_sim,
+                        )
+                        styles[i] = new_style
+                        if retry_ref and retry_ref[0] is not None:
+                            ref_results[i] = retry_ref[0]
 
         ref_by_pair: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
@@ -1518,31 +1545,22 @@ class DailySelfieService:
         style_pool: list[str],
         recent_styles: list[str],
     ) -> list[str]:
-        """r0: 算法选择风格（近期去重+等概率随机）。
+        """r0: 算法选择风格（近期去重+加权有放回抽样）。
 
         策略：
         1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"
-        2. 若新鲜池 >= count，从新鲜池中等概率随机抽 count 个
-           - 当前实现为等概率抽样（random.sample），未来可扩展为按"上次拍摄时间"加权
-        3. 若新鲜池 < count 但 >=1，从新鲜池全取，不足部分从近期池中补足
-        4. 若新鲜池为空，从全部风格池中随机抽 count 个（允许与近期重复）
+        2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个（cosplay 权重=10，其余=1）
+        3. 若新鲜池为空，从全部风格池中加权有放回抽 count 个
+        - 有放回允许同一风格被多次选中（如一次补拍拍多张 cosplay）
         """
         if not style_pool or count <= 0:
             return []
 
         recent_set = set(recent_styles)
         fresh_pool = [s for s in style_pool if s not in recent_set]
-        recent_pool = [s for s in style_pool if s in recent_set]
 
-        if fresh_pool and len(fresh_pool) >= count:
-            picked = self._random_sample(fresh_pool, count)
-        elif fresh_pool:
-            picked = list(fresh_pool)
-            need = count - len(picked)
-            if need > 0 and recent_pool:
-                picked.extend(self._random_sample(recent_pool, min(need, len(recent_pool))))
-        else:
-            picked = self._random_sample(style_pool, min(count, len(style_pool)))
+        pool = fresh_pool if fresh_pool else style_pool
+        picked = self._weighted_choices(pool, count)
 
         picked = picked[:count]
         logger.debug(
@@ -1552,16 +1570,16 @@ class DailySelfieService:
         return picked
 
     @staticmethod
-    def _random_sample(pool: list[str], k: int) -> list[str]:
-        """从 pool 中等概率随机抽取 k 个不重复元素。"""
+    def _weighted_choices(pool: list[str], k: int) -> list[str]:
+        """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=10，其余=1。"""
         if not pool or k <= 0:
             return []
-        k = min(k, len(pool))
+        weights = [10 if s == "cosplay" else 1 for s in pool]
         try:
-            return random.sample(pool, k)
+            return random.choices(pool, weights=weights, k=k)
         except Exception as e:
-            logger.warning("[DailySelfie] 随机抽样失败，回退: %s", e)
-            return random.sample(pool, min(k, len(pool)))
+            logger.warning("[DailySelfie] 加权抽样失败，回退等概率: %s", e)
+            return random.choices(pool, k=k)
 
     @staticmethod
     async def _stagger_start(scheduler: dict) -> None:
@@ -2204,17 +2222,21 @@ class DailySelfieService:
         wardrobe: Any,
         persona_name: str = "",
         min_similarity: float | None = None,
+        per_query_min_similarity: list[float | None] | None = None,
     ) -> list[dict]:
         used_ids: set[str] = set()
         results: list[dict | None] = [None] * len(queries)
 
         async def _search_one(idx: int, query: str) -> None:
             try:
+                sim = min_similarity
+                if per_query_min_similarity and idx < len(per_query_min_similarity):
+                    sim = per_query_min_similarity[idx]
                 if hasattr(wardrobe, "get_reference_image"):
                     ref = await wardrobe.get_reference_image(
                         query=query,
                         current_persona=persona_name,
-                        min_similarity=min_similarity,
+                        min_similarity=sim,
                         daily_selfie_mode=True,
                     )
                     if ref:
