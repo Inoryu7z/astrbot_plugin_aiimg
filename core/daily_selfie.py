@@ -1023,10 +1023,12 @@ class DailySelfieService:
         if daily_ref_min_sim is not None:
             logger.debug("[DailySelfie] 人格 %s 补拍搜图阈值: %s", persona_name, daily_ref_min_sim)
 
-        # cosplay 选中时强制不设阈值，确保能搜到参考图
+        # cosplay 选中时强制阈值=0，确保能搜到参考图
+        # 注意：传 None 会被 wardrobe.vector_searcher 回退为全局阈值（默认0.5），
+        # 必须显式传 0.0 才能真正不过滤
         per_query_sim: list[float | None] | None = None
         if any(s == "cosplay" for s in styles):
-            per_query_sim = [None if s == "cosplay" else daily_ref_min_sim for s in styles]
+            per_query_sim = [0.0 if s == "cosplay" else daily_ref_min_sim for s in styles]
 
         # ark_seedream 单图模式判定：
         #   - only_pid 指定且为 ark_seedream → 单图模式
