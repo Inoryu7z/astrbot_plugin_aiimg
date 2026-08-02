@@ -1,3 +1,13 @@
+### v2.0.0
+
+**👀 衣橱参考图注入对话模型**
+
+* 新增 `wardrobe_preview_to_llm` 开关，开启后 `aiimg_wardrobe_preview` 会把参考图作为图片返回给对话模型。
+* 对话模型看图后自主决定是否使用该参考图及参考哪些维度（服装/姿势/场景）。
+* `aiimg_generate` 新增 `use_wardrobe_ref` 参数，看图后判断不匹配可传 false 跳过该参考图。
+
+---
+
 ### v1.9.9
 
 **🎨 r2/r3 多模态参考图 + cosplay 风格加权**
