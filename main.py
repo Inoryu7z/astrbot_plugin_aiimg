@@ -1582,6 +1582,7 @@ class GiteeAIImagePlugin(Star):
             backend: str = "auto",
             output: str = "",
             use_wardrobe: bool = True,
+            use_wardrobe_ref: bool = True,
     ):
         """统一图片生成/改图/自拍工具。
 
@@ -1599,6 +1600,7 @@ class GiteeAIImagePlugin(Star):
             backend(string): auto=自动选择。可选值见下方列表，填显示名称或服务商ID均可。除非用户明确要求使用特定后端，否则永远填auto。
             output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
             use_wardrobe(boolean): 仅自拍模式生效。是否使用衣橱参考图。除非用户明确说「不用衣橱」「不要衣橱」，否则永远填true。
+            use_wardrobe_ref(boolean): 仅自拍模式且 use_wardrobe=true 时生效。是否使用 aiimg_wardrobe_preview 返回的衣橱参考图。当 features.selfie.wardrobe_preview_to_llm 开启时，你看图后判断参考图与用户需求不匹配可传 false 跳过该参考图（仅用人设图自拍）；关闭时或不需跳过则永远填true。
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
@@ -1642,7 +1644,8 @@ class GiteeAIImagePlugin(Star):
 
             task = asyncio.create_task(
                 self._async_llm_tool_generate(
-                    event, prompt, m, target_backend, size, resolution, user_id
+                    event, prompt, m, target_backend, size, resolution, user_id,
+                    use_wardrobe, use_wardrobe_ref
                 )
             )
             self._image_tasks.add(task)
@@ -1652,7 +1655,7 @@ class GiteeAIImagePlugin(Star):
         try:
             await mark_processing(event)
             image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
-                event, prompt, m, target_backend, size, resolution, use_wardrobe
+                event, prompt, m, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref
             )
             return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid)
         except Exception as e:
@@ -1671,6 +1674,7 @@ class GiteeAIImagePlugin(Star):
         size: str | None,
         resolution: str | None,
         use_wardrobe: bool = True,
+        use_wardrobe_ref: bool = True,
     ) -> tuple[Path, str, str | None]:
         if m in {"selfie_ref", "selfie", "ref"}:
             logger.debug("[aiimg] route=selfie_ref (explicit)")
@@ -1680,7 +1684,7 @@ class GiteeAIImagePlugin(Star):
                 raise RuntimeError("自拍功能未启用")
             image_path, used_pid = await self._generate_selfie_image(
                 event, prompt, target_backend, size=size, resolution=resolution,
-                use_wardrobe=use_wardrobe,
+                use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
             )
             return image_path, "selfie", used_pid
 
@@ -1694,7 +1698,7 @@ class GiteeAIImagePlugin(Star):
                     logger.debug("[aiimg] route=auto->selfie_ref")
                     image_path, used_pid = await self._generate_selfie_image(
                         event, prompt, target_backend, size=size, resolution=resolution,
-                        use_wardrobe=use_wardrobe,
+                        use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
                     )
                     return image_path, "selfie", used_pid
                 except Exception as e:
@@ -1755,10 +1759,12 @@ class GiteeAIImagePlugin(Star):
         size: str | None,
         resolution: str | None,
         user_id: str,
+        use_wardrobe: bool = True,
+        use_wardrobe_ref: bool = True,
     ) -> None:
         try:
             image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
-                event, prompt, mode, target_backend, size, resolution
+                event, prompt, mode, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref
             )
             self._remember_last_image(event, image_path, mode=result_mode, prompt=prompt)
             if result_mode == "selfie":
@@ -1855,11 +1861,17 @@ class GiteeAIImagePlugin(Star):
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
-        """【自拍专用】从衣橱中检索一张参考图并返回其文字描述，用于指导自拍提示词的构建。
-        本工具不会发送图片给用户，只返回文字描述供你参考。
+        """【自拍专用】从衣橱中检索一张参考图并返回其描述，用于指导自拍提示词的构建。
+        本工具不会发送图片给用户，只返回参考图信息供你参考。
         不要与 search_wardrobe_image 混淆：search_wardrobe_image 是直接发送图片给用户查看，而本工具是自拍流程的预处理步骤。
-        使用流程：先调用本工具获取描述 → 根据描述构建提示词 → 再调用 aiimg_generate(mode=selfie_ref) 生图。
+        使用流程：先调用本工具获取参考图 → 根据参考图构建提示词 → 再调用 aiimg_generate(mode=selfie_ref) 生图。
         仅当 features.selfie.wardrobe_ref_enabled 开启时可用。
+
+        当 features.selfie.wardrobe_preview_to_llm 开启时，本工具会同时返回参考图的图片和文字描述，
+        你可以看图后自主决定是否使用该参考图：
+        - 服装匹配 → 在提示词中参考该图的服装/姿势/场景等维度
+        - 服装不匹配但其他维度可参考 → 在提示词中只参考姿势/场景等，服装用用户需求
+        - 完全不匹配 → 调用 aiimg_generate 时传 use_wardrobe_ref=false，不使用该参考图
 
         Args:
             query(string): 自然语言检索描述，用于从衣橱中检索最匹配的参考图。当存在明确视觉焦点时，可在开头加"重点是X。"前缀强调检索优先级（X须是正文已有的核心元素），无单一焦点时直接写完整描述
@@ -1918,13 +1930,51 @@ class GiteeAIImagePlugin(Star):
         persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
         wardrobe_ref_index = persona_ref_count + 1
 
-        result_text = (
-            f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
-            f"{description}\n\n{hint}\n\n"
-            f"请根据以上描述构建自拍提示词，如果未调用对应的自拍skill那么现在立刻调用（已经调用则可忽略）。然后调用 aiimg_generate(mode=selfie_ref)。"
-            f"这张参考图的序号为{wardrobe_ref_index}，会自动作为额外参考图传入。"
-            f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
-        )
+        preview_to_llm = self._as_bool(selfie_conf.get("wardrobe_preview_to_llm", False), default=False)
+
+        if preview_to_llm:
+            result_text = (
+                f"衣橱参考图已找到（来自人格「{ref_persona}」），图片随附：\n"
+                f"{description}\n\n{hint}\n\n"
+                f"请查看上方参考图，自主判断是否使用及如何参考：\n"
+                f"- 服装匹配：参考服装/姿势/场景等维度\n"
+                f"- 服装不匹配但其他维度可参考：只参考姿势/场景等，服装用用户实际需求\n"
+                f"- 完全不匹配：调用 aiimg_generate 时传 use_wardrobe_ref=false\n\n"
+                f"调用对应的自拍skill构建提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
+                f"这张参考图的序号为{wardrobe_ref_index}，默认会作为额外参考图传入。"
+                f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
+            )
+        else:
+            result_text = (
+                f"衣橱参考图已找到（来自人格「{ref_persona}」）：\n"
+                f"{description}\n\n{hint}\n\n"
+                f"请根据以上描述构建自拍提示词，如果未调用对应的自拍skill那么现在立刻调用（已经调用则可忽略）。然后调用 aiimg_generate(mode=selfie_ref)。"
+                f"这张参考图的序号为{wardrobe_ref_index}，会自动作为额外参考图传入。"
+                f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
+            )
+
+        if preview_to_llm:
+            try:
+                image_path = Path(ref.get("image_path", ""))
+                if image_path.exists():
+                    compressed_bytes = await asyncio.to_thread(
+                        self._compress_for_llm_context, image_path, max_side=2048, quality=85
+                    )
+                    if compressed_bytes:
+                        b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
+                        return mcp.types.CallToolResult(
+                            content=[
+                                mcp.types.TextContent(type="text", text=result_text),
+                                mcp.types.ImageContent(
+                                    type="image",
+                                    data=b64_data,
+                                    mimeType="image/jpeg",
+                                ),
+                            ]
+                        )
+            except Exception as e:
+                logger.warning("[wardrobe_preview] 图片注入LLM失败，回退文字描述: %s", e)
+
         return self._build_llm_tool_text_desc_result(result_text)
 
     # ==================== 内部方法 ====================
@@ -3174,6 +3224,7 @@ class GiteeAIImagePlugin(Star):
             size: str | None = None,
             resolution: str | None = None,
             use_wardrobe: bool = True,
+            use_wardrobe_ref: bool = True,
     ) -> tuple[Path, str | None]:
         persona_name = await self._get_current_persona_name(event)
         if not persona_name:
@@ -3185,7 +3236,7 @@ class GiteeAIImagePlugin(Star):
 
         selfie_conf = self._get_feature("selfie")
         wardrobe_ref_added = False
-        if use_wardrobe and selfie_conf.get("wardrobe_ref_enabled", False):
+        if use_wardrobe and use_wardrobe_ref and selfie_conf.get("wardrobe_ref_enabled", False):
             wardrobe = self._get_wardrobe_instance()
             if wardrobe:
                 # 优先使用 aiimg_wardrobe_preview 缓存的结果，避免重复调用 wardrobe
@@ -3215,6 +3266,15 @@ class GiteeAIImagePlugin(Star):
                         ref.get("persona", "未知"),
                         ref.get("image_id", "未知"),
                     )
+                else:
+                    logger.debug("[selfie] 衣橱未返回参考图，仅用人设图")
+            else:
+                logger.debug("[selfie] 衣橱插件未就绪，跳过衣橱参考图")
+        elif use_wardrobe and not use_wardrobe_ref:
+            # LLM 主动跳过衣橱参考图（看图后判断不匹配）
+            user_id = str(event.get_sender_id() or "")
+            self._wardrobe_preview_cache.pop(user_id, None)
+            logger.debug("[selfie] LLM 主动跳过衣橱参考图（use_wardrobe_ref=false）")
 
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:

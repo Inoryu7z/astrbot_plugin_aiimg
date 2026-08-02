@@ -234,6 +234,12 @@
             "hint": "开启后，自拍时会从衣橱插件获取参考图并追加到人设参考图后面。需要衣橱插件已安装且已配置取图模型。",
             "default": false
           },
+          "wardrobe_preview_to_llm": {
+            "type": "bool",
+            "description": "衣橱参考图注入对话模型",
+            "hint": "开启后，aiimg_wardrobe_preview 会把参考图作为图片返回给对话模型，模型看图后自主决定是否使用及如何参考。关闭时只返回文字描述（旧行为）。",
+            "default": false
+          },
           "daily_selfie_schedule_time": {
             "type": "string",
             "description": "每日自拍补画触发时间",
