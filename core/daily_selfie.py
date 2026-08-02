@@ -1565,7 +1565,7 @@ class DailySelfieService:
 
         策略：
         1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"（cosplay 始终保留在新鲜池中）
-        2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个（cosplay 权重=10，其余=1）
+        2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个（cosplay 权重=5，其余=1）
         3. 若新鲜池为空，从全部风格池中加权有放回抽 count 个
         - 有放回允许同一风格被多次选中（如一次补拍拍多张 cosplay）
         """
@@ -1587,10 +1587,10 @@ class DailySelfieService:
 
     @staticmethod
     def _weighted_choices(pool: list[str], k: int) -> list[str]:
-        """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=10，其余=1。"""
+        """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=5，其余=1。"""
         if not pool or k <= 0:
             return []
-        weights = [10 if s == "cosplay" else 1 for s in pool]
+        weights = [5 if s == "cosplay" else 1 for s in pool]
         try:
             return random.choices(pool, weights=weights, k=k)
         except Exception as e:
