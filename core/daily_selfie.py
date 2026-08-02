@@ -464,6 +464,11 @@ class DailySelfieService:
         self._debug_events: deque = deque(maxlen=300)
         self._debug_current_persona: str = ""
 
+        # 今日已用参考图 id 集合：每张图每天补拍只用 1 次，避免单图风格（如护士服）反复引用同一张
+        # 跨补拍任务保持（同一天内多次 /补拍 共享），日期变更时清空
+        self._today_used_image_ids: set[str] = set()
+        self._today_used_date: str = ""
+
     def _record_debug(self, level: str, message: str) -> None:
         """记录一条补拍调试事件到内存缓冲区。
 
@@ -773,6 +778,12 @@ class DailySelfieService:
         total_fail = 0
         request_interval = 30
 
+        # 日期变更时清空今日已用参考图集合
+        today_str = datetime.now().strftime(_DATE_FMT)
+        if self._today_used_date != today_str:
+            self._today_used_image_ids.clear()
+            self._today_used_date = today_str
+
         debug_mode = self._is_debug()
         selfie_conf = self.plugin._get_feature("selfie")
         logger.debug(
@@ -1052,23 +1063,26 @@ class DailySelfieService:
         else:
             ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim)
 
-        # cosplay 无参考图 → 从排除 cosplay 的池中换一个风格，用常规阈值重搜1次
+        # 任何风格无参考图 → 排除当前风格和近期风格，换一个风格重搜1次
+        # 解决单图风格（如护士服）今日已用时搜不到图的问题
         if not ark_mode:
             recent_set = set(recent_styles)
             for i in range(pair_count):
-                if styles[i] == "cosplay" and ref_results[i] is None:
-                    non_cosplay_pool = [s for s in style_pool if s != "cosplay" and s not in recent_set]
-                    if not non_cosplay_pool:
-                        non_cosplay_pool = [s for s in style_pool if s != "cosplay"]
-                    if non_cosplay_pool:
-                        new_style = random.choice(non_cosplay_pool)
+                if ref_results[i] is None:
+                    alt_pool = [s for s in style_pool if s != styles[i] and s not in recent_set]
+                    if not alt_pool:
+                        alt_pool = [s for s in style_pool if s != styles[i]]
+                    if alt_pool:
+                        new_style = random.choice(alt_pool)
                         new_query = f"{new_style} {scenes[i]}"
+                        # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
+                        retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
                         logger.debug(
-                            "[DailySelfie] 人格 %s cosplay无参考图，换风格: cosplay→%s",
-                            persona_name, new_style,
+                            "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
+                            persona_name, styles[i], new_style,
                         )
                         retry_ref = await self._search_reference_images(
-                            [new_query], wardrobe, persona_name, min_similarity=daily_ref_min_sim,
+                            [new_query], wardrobe, persona_name, min_similarity=retry_sim,
                         )
                         styles[i] = new_style
                         if retry_ref and retry_ref[0] is not None:
@@ -1547,10 +1561,10 @@ class DailySelfieService:
         style_pool: list[str],
         recent_styles: list[str],
     ) -> list[str]:
-        """r0: 算法选择风格（近期去重+加权有放回抽样）。
+        """r0: 算法选择风格（近期去重+加权有放回抽样，cosplay 豁免去重）。
 
         策略：
-        1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"
+        1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"（cosplay 始终保留在新鲜池中）
         2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个（cosplay 权重=10，其余=1）
         3. 若新鲜池为空，从全部风格池中加权有放回抽 count 个
         - 有放回允许同一风格被多次选中（如一次补拍拍多张 cosplay）
@@ -1559,7 +1573,7 @@ class DailySelfieService:
             return []
 
         recent_set = set(recent_styles)
-        fresh_pool = [s for s in style_pool if s not in recent_set]
+        fresh_pool = [s for s in style_pool if s not in recent_set or s == "cosplay"]
 
         pool = fresh_pool if fresh_pool else style_pool
         picked = self._weighted_choices(pool, count)
@@ -2243,9 +2257,12 @@ class DailySelfieService:
                     )
                     if ref:
                         img_id = str(ref.get("image_id", ""))
-                        if img_id and img_id not in used_ids:
+                        if img_id and img_id not in used_ids and img_id not in self._today_used_image_ids:
                             used_ids.add(img_id)
+                            self._today_used_image_ids.add(img_id)
                             results[idx] = ref
+                        elif img_id and img_id in self._today_used_image_ids:
+                            logger.debug("[DailySelfie] 参考图今日已用，跳过: id=%s query=%s", img_id, query[:50])
             except Exception as e:
                 logger.warning("[DailySelfie] 参考图搜索失败: query=%s error=%s", query[:50], e)
 
