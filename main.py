@@ -1924,11 +1924,11 @@ class GiteeAIImagePlugin(Star):
         ref_persona = ref.get("persona", "") or "未知"
         ref_strength = ref.get("ref_strength", "style") or "style"
 
-        from .core.daily_selfie import _build_strength_hint
-        hint = _build_strength_hint(ref_strength)
-
         persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
         wardrobe_ref_index = persona_ref_count + 1
+
+        from .core.daily_selfie import _build_strength_hint
+        hint = _build_strength_hint(ref_strength, persona_ref_count)
 
         preview_to_llm = self._as_bool(selfie_conf.get("wardrobe_preview_to_llm", False), default=False)
 
@@ -1936,7 +1936,7 @@ class GiteeAIImagePlugin(Star):
             result_text = (
                 f"衣橱参考图已找到（来自人格「{ref_persona}」），图片随附：\n"
                 f"{description}\n\n{hint}\n\n"
-                f"请查看上方参考图，自主判断是否使用及如何参考：\n"
+                f"请查看上方参考图，自主判断是否使用及如何参考（cosplay风格下完全相信衣橱里的服装匹配度）：\n"
                 f"- 服装匹配：参考服装/姿势/场景等维度\n"
                 f"- 服装不匹配但其他维度可参考：只参考姿势/场景等，服装用用户实际需求\n"
                 f"- 完全不匹配：调用 aiimg_generate 时传 use_wardrobe_ref=false\n\n"
@@ -3215,6 +3215,59 @@ class GiteeAIImagePlugin(Star):
             logger.debug("[aiimg] _is_ark_seedream_provider(%s) 检查异常: %s", pid, e)
             return False
 
+    def _get_provider_template_key(self, provider_id: str) -> str:
+        """查 provider 的 __template_key，registry 不可用时返回空串。"""
+        pid = str(provider_id or "").strip()
+        if not pid:
+            return ""
+        if not self.edit or not self.edit.registry:
+            return ""
+        try:
+            conf = self.edit.registry.get(pid)
+            if not isinstance(conf, dict):
+                return ""
+            return str(conf.get("__template_key") or "").strip()
+        except Exception as e:
+            logger.debug("[aiimg] _get_provider_template_key(%s) 检查异常: %s", pid, e)
+            return ""
+
+    def _resolve_selfie_ref_resolution(
+        self, backend: str | None, chain_override: list | None,
+    ) -> str | None:
+        """自拍/补拍有衣橱参考图或用户图时，按后端类型决定分辨率覆盖。
+
+        - 全部 openai_full_url_images → "4K"
+        - 全部 ark_seedream → "1K"
+        - 混合或含其他后端 → None（不覆盖，用各自默认尺寸）
+        """
+        pids: list[str] = []
+        if backend:
+            pids = [str(backend).strip()]
+        elif chain_override:
+            for item in chain_override:
+                if isinstance(item, dict):
+                    pid = str(item.get("provider_id") or item.get("provider") or "").strip()
+                    if pid:
+                        pids.append(pid)
+                elif isinstance(item, str) and item.strip():
+                    pids.append(item.strip())
+
+        if not pids:
+            return None
+
+        template_keys: set[str] = set()
+        for pid in pids:
+            tk = self._get_provider_template_key(pid)
+            if not tk:
+                return None
+            template_keys.add(tk)
+
+        if template_keys == {"openai_full_url_images"}:
+            return "4K"
+        if template_keys == {"ark_seedream"}:
+            return "1K"
+        return None
+
     async def _generate_selfie_image(
             self,
             event: AstrMessageEvent,
@@ -3298,6 +3351,15 @@ class GiteeAIImagePlugin(Star):
         images = [*ref_images, *extra_bytes]
 
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0), prompt_prefix=prompt_prefix)
+
+        # 有衣橱参考图或用户图时，按后端类型覆盖分辨率（4K/1K），优先于用户指定的比例
+        has_ref_image = wardrobe_ref_added or len(extra_bytes) > 0
+        if has_ref_image:
+            ref_resolution = self._resolve_selfie_ref_resolution(backend, chain_override)
+            if ref_resolution:
+                size = None
+                resolution = ref_resolution
+                logger.debug("[selfie] 参考图存在，分辨率覆盖为 %s", ref_resolution)
 
         logger.debug(
             "[selfie] persona=%s source=%s providers=%s size=%s default_output=%s",
@@ -3387,6 +3449,7 @@ class GiteeAIImagePlugin(Star):
 
         # ark_seedream 单图模式：只传人设参考图 #1，不传衣橱图，不用后两张人设图
         is_ark = self._is_ark_seedream_provider(provider_id)
+        wardrobe_ref_appended = False
         if is_ark:
             ref_paths = [ref_paths[0]]
             logger.debug("[daily_selfie] 人格 %s ark_seedream 单图模式，仅传人设参考图 #1", persona_name)
@@ -3394,6 +3457,7 @@ class GiteeAIImagePlugin(Star):
             p = Path(ref_image_path)
             if p.exists():
                 ref_paths.append(p)
+                wardrobe_ref_appended = True
 
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
@@ -3453,12 +3517,21 @@ class GiteeAIImagePlugin(Star):
         available = self.edit.get_available_backends()
         logger.debug("[daily_selfie] edit可用后端: %s", available)
 
+        # 有衣橱参考图时，按后端类型覆盖分辨率（4K/1K）
+        ref_resolution: str | None = None
+        if wardrobe_ref_appended:
+            ref_resolution = self._resolve_selfie_ref_resolution(
+                backend_override, chain_override
+            )
+            if ref_resolution:
+                logger.debug("[daily_selfie] 参考图存在，分辨率覆盖为 %s", ref_resolution)
+
         return await self.edit.edit(
             prompt=final_prompt,
             images=ref_images,
             backend=backend_override,
             size=None,
-            resolution=None,
+            resolution=ref_resolution,
             default_output=persona_default_output,
             chain_override=chain_override,
         )
