@@ -159,34 +159,54 @@ class DailyQuotaCounter:
         return self._data.get("date", "")
 
 
-_DAILY_SELFIE_REF_HINT = (
-    "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
-    "不要模仿图4（即本描述指向的图片）的构图和姿势。"
-    "其中，前3张参考图（系统已内置）是你的人设图，"
-    "要使用这张新的参考图，请在提示词中使用参考图4来引用该参考图，"
-)
+def _build_ref_hint(persona_ref_count: int) -> str:
+    """补拍路径的参考图提示。persona_ref_count 为人设参考图数量，衣橱参考图序号为 persona_ref_count+1。"""
+    ref_index = persona_ref_count + 1
+    return (
+        "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
+        f"不要模仿图{ref_index}（即本描述指向的图片）的构图和姿势。"
+        f"其中，前{persona_ref_count}张参考图（系统已内置）是你的人设图，"
+        f"要使用这张新的参考图，请在提示词中使用参考图{ref_index}来引用该参考图，"
+    )
 
 
-def _build_strength_hint(ref_strength: str) -> str:
+def _build_strength_hint(ref_strength: str, persona_ref_count: int = 3) -> str:
+    """对话 LLM 路径的参考图力度提示。persona_ref_count 为人设参考图数量。"""
+    ref_index = persona_ref_count + 1
     if ref_strength == "full":
         return (
             "完全模仿这张参考图的姿势、构图和氛围。"
-            "请使用有图流程，以图4（即本描述指向的图片）为完整模仿对象，"
-            "保留其全部视觉细节（不包括图4可能出现的人物面部特征细节，"
-            "那不是你，你的人设参考图为前三张）。"
+            f"请使用有图流程，以图{ref_index}（即本描述指向的图片）为完整模仿对象，"
+            f"保留其全部视觉细节（不包括图{ref_index}可能出现的人物面部特征细节，"
+            f"那不是你，你的人设参考图为前{persona_ref_count}张）。"
         )
     elif ref_strength == "reimagine":
         return (
             "用户喜欢这张图片的服装款式，但希望姿势与构图完全重新设计。"
             "请使用无图流程 C（衣橱图仅保留服装），仅提取服装描述，"
-            "不要模仿图4（即本描述指向的图片）的构图和姿势。"
+            f"不要模仿图{ref_index}（即本描述指向的图片）的构图和姿势。"
         )
     else:
         return (
             "用户喜欢这张图片的服装风格和整体氛围，但希望姿势和构图做适当调整。"
-            "请使用有图流程，以图4（即本描述指向的图片）为模仿对象，"
+            f"请使用有图流程，以图{ref_index}（即本描述指向的图片）为模仿对象，"
             "保留其服装与氛围，微调姿势和构图。"
         )
+
+
+_REF_COUNT_NUM_CN = {1: "一", 2: "两", 3: "三", 4: "四", 5: "五"}
+
+
+def _apply_persona_ref_count(text: str, persona_ref_count: int) -> str:
+    """动态替换系统提示词中的"三张人设参考图"为实际数量。
+
+    仅当 persona_ref_count != 3 时替换，避免无谓的字符串操作。
+    用中文数字保持与原文风格一致。
+    """
+    if persona_ref_count == 3 or not text:
+        return text
+    count_cn = _REF_COUNT_NUM_CN.get(persona_ref_count, str(persona_ref_count))
+    return text.replace("三张人设参考图", f"{count_cn}张人设参考图")
 
 _ROUND2_SCENE_SYSTEM_PROMPT = (
     "【场景概念生成任务】\n\n"
@@ -905,13 +925,15 @@ class DailySelfieService:
             return configured
         return self._get_chat_provider_id(umo)
 
-    def _get_prompt_engineer_system_prompt(self, persona: dict) -> str:
-        """读取人格级提示词构建系统提示词，留空则回退到内置默认常量。"""
+    def _get_prompt_engineer_system_prompt(self, persona: dict, persona_ref_count: int = 3) -> str:
+        """读取人格级提示词构建系统提示词，留空则回退到内置默认常量。
+
+        persona_ref_count 为人设参考图数量，用于动态替换系统提示词中的"三张人设参考图"。
+        """
         persona_conf = persona.get("config", {})
         configured = str(persona_conf.get("prompt_engineer_system_prompt", "") or "").strip()
-        if configured:
-            return configured
-        return _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+        base = configured if configured else _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+        return _apply_persona_ref_count(base, persona_ref_count)
 
     def _get_reviewer_system_prompt(self, persona: dict) -> str:
         """读取人格级审核师系统提示词，留空则回退到内置默认常量。
@@ -1108,7 +1130,7 @@ class DailySelfieService:
                 desc = ref.get("description", "")
                 if desc:
                     ref_descriptions.append(
-                        f"参考图{search_ref_index}描述：{desc}\n\n{_DAILY_SELFIE_REF_HINT}\n\n"
+                        f"参考图{search_ref_index}描述：{desc}\n\n{_build_ref_hint(persona_ref_count)}\n\n"
                         f"这张参考图的序号为{search_ref_index}，请在提示词中使用序号{search_ref_index}来引用该参考图。"
                     )
                 else:
@@ -1119,7 +1141,7 @@ class DailySelfieService:
                 ref_by_index.append(None)
 
         costume_system_prompt = self._get_costume_designer_system_prompt(persona)
-        prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona)
+        prompt_engineer_system_prompt = self._get_prompt_engineer_system_prompt(persona, persona_ref_count)
         reviewer_system_prompt = self._get_reviewer_system_prompt(persona)
 
         batch_size = 2
@@ -1153,7 +1175,7 @@ class DailySelfieService:
                     designer_provider_id, reviewer_provider_id, prompt_engineer_provider_id,
                     costume_system_prompt, reviewer_system_prompt, prompt_engineer_system_prompt,
                     r3_scheduler, r4_scheduler, image_scheduler,
-                    persona, only_pid,
+                    persona, only_pid, persona_ref_count,
                 )
             )
             batch_tasks.append(task)
@@ -1634,6 +1656,7 @@ class DailySelfieService:
         image_scheduler: dict,
         persona: dict,
         only_pid: str,
+        persona_ref_count: int = 3,
     ) -> tuple[int, int, dict[str, list[Path]], list[tuple[str, str, str]]]:
         """处理一个批次的 r2设计→r3审核→r4翻译→画图，返回 (success, fail, provider_success, failed_items)。
 
@@ -1766,6 +1789,7 @@ class DailySelfieService:
             prompts = await self._llm_round4_prompt(
                 designs, prompt_engineer_provider_id,
                 system_prompt=prompt_engineer_system_prompt,
+                persona_ref_count=persona_ref_count,
             )
             logger.debug(
                 "[DailySelfie] 人格 %s r4提示词 批次 %d/%d 返回 %d 条提示词",
@@ -2173,6 +2197,7 @@ class DailySelfieService:
         designs: list[dict],
         chat_provider_id: str,
         system_prompt: str = "",
+        persona_ref_count: int = 3,
     ) -> list[str]:
         designs_text = "\n".join(
             f"- 服装：{d.get('clothing', '')} | 外观：{d.get('appearance', '')} | 动作：{d.get('pose', '')} | 场景：{d.get('scene', '')}"
@@ -2182,7 +2207,9 @@ class DailySelfieService:
             count=len(designs), designs=designs_text,
         )
 
-        effective_prompt = system_prompt or _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+        effective_prompt = system_prompt or _apply_persona_ref_count(
+            _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, persona_ref_count
+        )
 
         # 重试一次：超时/异常/返回空/返回条数不足均重试
         expected = len(designs)
