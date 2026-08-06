@@ -3301,7 +3301,13 @@ class GiteeAIImagePlugin(Star):
                         "[selfie] 使用 wardrobe_preview 缓存: image_id=%s",
                         ref.get("image_id", "未知"),
                     )
+                elif self._as_bool(selfie_conf.get("wardrobe_preview_to_llm", False), default=False):
+                    # wardrobe_preview_to_llm=true 时，LLM 必须先调 aiimg_wardrobe_preview 看图
+                    # 没调则不自动找衣橱图，只用人设图（避免 LLM 用了没见过的图）
+                    logger.info("[selfie] wardrobe_preview_to_llm=true 但 LLM 未调用 aiimg_wardrobe_preview，跳过衣橱参考图，仅用人设图")
+                    ref = None
                 else:
+                    # wardrobe_preview_to_llm=false 时，LLM 不看图，自动找衣橱图
                     query = (prompt or "").strip() or "日常自拍照"
                     try:
                         ref = await wardrobe.get_reference_image(
