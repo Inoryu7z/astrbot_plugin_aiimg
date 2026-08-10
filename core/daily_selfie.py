@@ -1664,6 +1664,15 @@ class DailySelfieService:
         顶层 try/except 保证单批次异常不影响其他批次的结果。
         """
         try:
+            # 有衣橱参考图的批次：跳过 r2/r3，逐条调 r4 有图模式
+            if batch_refs and all(ref is not None for ref in batch_refs):
+                return await self._process_ref_batch(
+                    persona_name, batch_num, total_batches,
+                    batch_styles, batch_scenes, batch_refs,
+                    prompt_engineer_provider_id, prompt_engineer_system_prompt,
+                    r4_scheduler, image_scheduler, persona, only_pid,
+                )
+
             non_empty_refs = [d for d in batch_refs_desc if d]
 
             # 提取参考图 URI 供 r2/r3 多模态使用。
@@ -2266,6 +2275,185 @@ class DailySelfieService:
                     continue
                 return []
         return []
+
+    async def _llm_round4_prompt_with_ref(
+        self,
+        style: str,
+        scene: str,
+        ref_strength: str,
+        chat_provider_id: str,
+        ref_images: list[str] | None = None,
+        system_prompt: str = "",
+    ) -> str:
+        """有衣橱参考图时，r4 逐条构建提示词。第1次带图，失败回退纯文本。"""
+        user_prompt = (
+            "请基于参考图和以下信息构建1条图像生成提示词：\n"
+            f"风格：{style}\n"
+            f"场景：{scene}\n"
+            f"参考图力度：{ref_strength}\n"
+            "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图）"
+        )
+
+        effective_prompt = system_prompt or _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
+
+        for attempt in range(2):
+            current_images = ref_images if (ref_images and attempt == 0) else None
+            try:
+                resp = await asyncio.wait_for(
+                    self.plugin.context.llm_generate(
+                        chat_provider_id=chat_provider_id,
+                        prompt=user_prompt,
+                        image_urls=current_images,
+                        system_prompt=effective_prompt,
+                    ),
+                    timeout=360,
+                )
+                text = (getattr(resp, "completion_text", "") or "").strip()
+                if not text:
+                    logger.warning(
+                        "[DailySelfie] r4有图提示词返回空(重试%d/2)%s",
+                        attempt + 1,
+                        "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
+                    )
+                    if attempt == 0:
+                        continue
+                    return ""
+                return text
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[DailySelfie] r4有图提示词超时(360s)(重试%d/2)%s",
+                    attempt + 1,
+                    "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
+                )
+                self._record_debug("ERROR", f"r4有图提示词超时(360s)(重试{attempt + 1}/2)")
+                if attempt == 0:
+                    continue
+                return ""
+            except Exception as e:
+                logger.error("[DailySelfie] r4有图提示词失败(重试%d/2): %s", attempt + 1, e)
+                if attempt == 0:
+                    continue
+                return ""
+        return ""
+
+    async def _process_ref_batch(
+        self,
+        persona_name: str,
+        batch_num: int,
+        total_batches: int,
+        batch_styles: list[str],
+        batch_scenes: list[str],
+        batch_refs: list[dict],
+        prompt_engineer_provider_id: str,
+        prompt_engineer_system_prompt: str,
+        r4_scheduler: dict,
+        image_scheduler: dict,
+        persona: dict,
+        only_pid: str,
+    ) -> tuple[int, int, dict[str, list[Path]], list[tuple[str, str, str]]]:
+        """有衣橱参考图的批次：跳过 r2/r3，逐条调 r4 有图模式 + 画图。"""
+        try:
+            prompts: list[str] = []
+            strengths: list[str] = []
+            for i, (style, scene, ref) in enumerate(zip(batch_styles, batch_scenes, batch_refs)):
+                ref_strength = "full" if style == "cosplay" else "reimagine"
+                strengths.append(ref_strength)
+                img_path = ref.get("image_path", "")
+                p = Path(img_path) if img_path else None
+                img_uri = p.as_uri() if (p and p.exists()) else None
+
+                await self._stagger_start(r4_scheduler)
+                prompt = await self._llm_round4_prompt_with_ref(
+                    style, scene, ref_strength,
+                    prompt_engineer_provider_id,
+                    ref_images=[img_uri] if img_uri else None,
+                    system_prompt=prompt_engineer_system_prompt,
+                )
+                prompts.append(prompt)
+
+            logger.debug(
+                "[DailySelfie] 人格 %s r4有图 批次 %d/%d 返回 %d 条提示词",
+                persona_name, batch_num, total_batches, len(prompts),
+            )
+            self._record_debug(
+                "INFO",
+                f"r4有图 批次 {batch_num}/{total_batches}：跳过r2/r3，返回 {len(prompts)} 条提示词",
+            )
+
+            # 组装 (prompt, ref, strength) 配对
+            result_prompts: list[tuple[str, dict | None, str]] = []
+            actual_count = min(len(prompts), len(batch_refs))
+            for i in range(actual_count):
+                ref = batch_refs[i] if i < len(batch_refs) else None
+                strength = strengths[i] if i < len(strengths) else "reimagine"
+                result_prompts.append((prompts[i].strip() if prompts[i] else "", ref, strength))
+
+            # 画图
+            success = 0
+            fail = 0
+            provider_success: dict[str, list[Path]] = {}
+            failed_items: list[tuple[str, str, str]] = []
+
+            image_tasks: list[asyncio.Task] = []
+            task_prompts: list[tuple[str, dict | None, str, str]] = []
+
+            for prompt, ref, ref_strength in result_prompts:
+                if not prompt:
+                    fail += 1
+                    continue
+
+                ref_image_path = ref.get("image_path", "") if ref else ""
+                if not ref_image_path:
+                    ref_image_path = ""
+                    ref_strength = ""
+
+                selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
+                if selected_pid is None:
+                    logger.debug("[DailySelfie] 人格 %s 所有提供商额度用完，停止", persona_name)
+                    break
+
+                await self._stagger_start(image_scheduler)
+                t = asyncio.create_task(
+                    self._generate_one_selfie(
+                        persona_name, prompt, ref_image_path, ref_strength, persona,
+                        provider_id=selected_pid,
+                    )
+                )
+                image_tasks.append(t)
+                task_prompts.append((prompt, ref, selected_pid, ref_strength))
+
+            if image_tasks:
+                img_results = await asyncio.gather(*image_tasks, return_exceptions=True)
+                logger.debug(
+                    "[DailySelfie] 人格 %s r4有图 批次 %d/%d 画图完成: tasks=%d results=%d",
+                    persona_name, batch_num, total_batches, len(image_tasks), len(img_results),
+                )
+                for i, r in enumerate(img_results):
+                    if isinstance(r, Path):
+                        success += 1
+                        if i < len(task_prompts):
+                            _pid = task_prompts[i][2]
+                            provider_success.setdefault(_pid, []).append(r)
+                    else:
+                        fail += 1
+                        if isinstance(r, Exception):
+                            logger.error("[DailySelfie] 人格 %s 生图任务 %d 异常: %s", persona_name, i, r)
+                        else:
+                            logger.warning("[DailySelfie] 人格 %s 生图任务 %d 返回 None", persona_name, i)
+                        if i < len(task_prompts):
+                            prompt_text, ref_info, _pid, ref_strength = task_prompts[i]
+                            if _pid:
+                                await self.counter.release(persona_name, _pid)
+                            ref_path = ref_info.get("image_path", "") if ref_info else ""
+                            failed_items.append((prompt_text, ref_path, ref_strength))
+
+            return (success, fail, provider_success, failed_items)
+        except Exception as e:
+            logger.error(
+                "[DailySelfie] 人格 %s r4有图 批次 %d/%d 异常: %s",
+                persona_name, batch_num, total_batches, e, exc_info=True,
+            )
+            return (0, 0, {}, [])
 
     async def _search_reference_images(
         self,
