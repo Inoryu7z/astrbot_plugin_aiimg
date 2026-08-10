@@ -1775,19 +1775,19 @@ class DailySelfieService:
                     )
                 return (0, 0, {}, [])
 
-            # r3 审核（错开启动，避免并发打满 provider；第1次带参考图，失败回退纯文本描述）
+            # r3 审核（错开启动；审核基于文本设计方案，不看参考图）
             await self._stagger_start(r3_scheduler)
             designs = await self._llm_round3_review(
                 reviewer_provider_id, batch_styles, batch_scenes, designs,
                 ref_descriptions=non_empty_refs if non_empty_refs else None,
-                ref_images=ref_image_uris,
                 system_prompt=reviewer_system_prompt,
             )
 
-            # r4 翻译（错开启动）
+            # r4 翻译（错开启动；第1次带参考图，失败回退纯文本描述）
             await self._stagger_start(r4_scheduler)
             prompts = await self._llm_round4_prompt(
                 designs, prompt_engineer_provider_id,
+                ref_images=ref_image_uris,
                 system_prompt=prompt_engineer_system_prompt,
                 persona_ref_count=persona_ref_count,
             )
@@ -2196,6 +2196,7 @@ class DailySelfieService:
         self,
         designs: list[dict],
         chat_provider_id: str,
+        ref_images: list[str] | None = None,
         system_prompt: str = "",
         persona_ref_count: int = 3,
     ) -> list[str]:
@@ -2212,20 +2213,27 @@ class DailySelfieService:
         )
 
         # 重试一次：超时/异常/返回空/返回条数不足均重试
+        # 第1次带参考图（多模态），失败时第2次回退为纯文本描述
         expected = len(designs)
         for attempt in range(2):
+            current_images = ref_images if (ref_images and attempt == 0) else None
             try:
                 resp = await asyncio.wait_for(
                     self.plugin.context.llm_generate(
                         chat_provider_id=chat_provider_id,
                         prompt=user_prompt,
+                        image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
                     timeout=360,
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
-                    logger.warning("[DailySelfie] r4提示词返回空文本(重试%d/2)", attempt + 1)
+                    logger.warning(
+                        "[DailySelfie] r4提示词返回空文本(重试%d/2)%s",
+                        attempt + 1,
+                        "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
+                    )
                     if attempt == 0:
                         logger.debug("[DailySelfie] r4提示词返回空，重试一次")
                         continue
@@ -2245,7 +2253,7 @@ class DailySelfieService:
                     )
                 return parsed
             except asyncio.TimeoutError:
-                logger.error("[DailySelfie] r4提示词调用超时(360s)(重试%d/2)", attempt + 1)
+                logger.error("[DailySelfie] r4提示词调用超时(360s)(重试%d/2)%s", attempt + 1, "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "")
                 self._record_debug("ERROR", f"r4提示词调用超时(360s)(重试{attempt + 1}/2)")
                 if attempt == 0:
                     logger.debug("[DailySelfie] r4提示词超时，重试一次")
