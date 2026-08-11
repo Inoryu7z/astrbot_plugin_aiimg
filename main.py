@@ -3358,14 +3358,14 @@ class GiteeAIImagePlugin(Star):
 
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0), prompt_prefix=prompt_prefix)
 
-        # 有衣橱参考图或用户图时，按后端类型覆盖分辨率（4K/1K），优先于用户指定的比例
+        # 有衣橱参考图或用户图时，按后端类型用分辨率档位覆盖（4K/1K），走方式1让模型看prompt里的宽高比描述
         has_ref_image = wardrobe_ref_added or len(extra_bytes) > 0
         if has_ref_image:
             ref_resolution = self._resolve_selfie_ref_resolution(backend, chain_override)
             if ref_resolution:
-                size = None
-                resolution = ref_resolution
-                logger.debug("[selfie] 参考图存在，分辨率覆盖为 %s", ref_resolution)
+                size = ref_resolution
+                resolution = None
+                logger.debug("[selfie] 参考图存在，size覆盖为档位 %s（走方式1，由模型读prompt宽高比）", ref_resolution)
 
         logger.debug(
             "[selfie] persona=%s source=%s providers=%s size=%s default_output=%s",
@@ -3523,21 +3523,21 @@ class GiteeAIImagePlugin(Star):
         available = self.edit.get_available_backends()
         logger.debug("[daily_selfie] edit可用后端: %s", available)
 
-        # 有衣橱参考图时，按后端类型覆盖分辨率（4K/1K）
+        # 有衣橱参考图时，按后端类型用分辨率档位覆盖（4K/1K），走方式1让模型看prompt里的宽高比描述
         ref_resolution: str | None = None
         if wardrobe_ref_appended:
             ref_resolution = self._resolve_selfie_ref_resolution(
                 backend_override, chain_override
             )
             if ref_resolution:
-                logger.debug("[daily_selfie] 参考图存在，分辨率覆盖为 %s", ref_resolution)
+                logger.debug("[daily_selfie] 参考图存在，size覆盖为档位 %s（走方式1，由模型读prompt宽高比）", ref_resolution)
 
         return await self.edit.edit(
             prompt=final_prompt,
             images=ref_images,
             backend=backend_override,
-            size=None,
-            resolution=ref_resolution,
+            size=ref_resolution,
+            resolution=None,
             default_output=persona_default_output,
             chain_override=chain_override,
         )
