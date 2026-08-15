@@ -75,11 +75,12 @@
 
 | 工具名 | 说明 |
 |--------|------|
-| `aiimg_generate` | 统一图片生成/改图/自拍。参数：`prompt` / `mode`（auto/text/edit/selfie_ref）/ `backend` / `output` / `use_wardrobe`（仅自拍，是否用衣橱参考图） |
+| `aiimg_generate` | 统一图片生成/改图/自拍。参数：`prompt` / `mode`（auto/text/edit/selfie_ref）/ `backend` / `output` / `use_wardrobe`（仅自拍，是否用衣橱参考图）/ `use_asset`、`asset_id`（仅自拍，是否注入部位素材） |
 | `aiimg_draw` | 纯文生图快捷入口 |
 | `aiimg_edit` | 改图快捷入口 |
 | `aiimg_video` | 视频生成。参数：`prompt` / `image_url` / `backend` |
 | `aiimg_wardrobe_preview` | 自拍专用：从衣橱检索参考图并返回文字描述，用于指导提示词构建。需开启 `features.selfie.wardrobe_ref_enabled` |
+| `aiimg_asset_preview` | 自拍专用：精读部位素材参考图并返回描述与图片，素材池直接注入工具描述。需开启 `features.selfie.asset_ref_enabled`；使用素材后一般不再同时用衣橱参考图 |
 
 ---
 
