@@ -117,6 +117,9 @@ class GiteeAIImagePlugin(Star):
         # 缓存 wardrobe preview 结果，避免 _generate_selfie_image 重复调用 wardrobe。
         # 格式：{user_id: {"image_path": str, "description": str, "persona": str, "image_id": str}}
         self._wardrobe_preview_cache: dict[str, dict] = {}
+        # 缓存 aiimg_asset_preview 选中的部位素材，供 _generate_selfie_image 注入。
+        # 格式：{user_id: {"asset_id": str, "short_tag": str, "description": str, "image_path": str}}
+        self._asset_preview_cache: dict[str, dict] = {}
 
     async def _call_native_poke(self, event: AstrMessageEvent, target_id: str) -> bool:
         bot = getattr(event, "bot", None)
@@ -200,6 +203,15 @@ class GiteeAIImagePlugin(Star):
 
         self._inject_provider_list_to_tool_doc()
 
+        # 初始化后异步刷新部位素材池到工具描述（wardrobe 可能尚未就绪，失败由后续调用兜底）
+        try:
+            import asyncio as _asyncio
+            _asyncio.get_running_loop().create_task(
+                self._refresh_asset_pool_in_tool_doc()
+            )
+        except Exception:
+            pass
+
     def _inject_provider_list_to_tool_doc(self):
         image_labels = self.registry.provider_labels(kind="image")
         video_labels = self.registry.provider_labels(kind="video")
@@ -228,6 +240,43 @@ class GiteeAIImagePlugin(Star):
             func_tool = llm_tools.get_func("aiimg_video")
             if func_tool and func_tool.description:
                 func_tool.description += vid_block
+
+    _ASSET_POOL_DOC_MARKER = "\n\n【当前部位素材池】\n"
+
+    def _inject_asset_pool_to_tool_doc(self, pool_text: str):
+        """把当前部位素材池注入 llm 工具描述，替换旧块。pool_text 为空表示素材库为空。"""
+        from astrbot.core.provider.register import llm_tools
+
+        block = self._ASSET_POOL_DOC_MARKER + (
+            pool_text if pool_text else "（当前素材库为空，无需注入部位素材）"
+        )
+        func_tool = llm_tools.get_func("aiimg_asset_preview")
+        if func_tool and func_tool.description:
+            desc = func_tool.description
+            marker = self._ASSET_POOL_DOC_MARKER
+            idx = desc.find(marker)
+            if idx != -1:
+                desc = desc[:idx]
+            func_tool.description = desc + block
+
+    async def _refresh_asset_pool_in_tool_doc(self):
+        """从 wardrobe 拉取最新素材标签池并刷新到工具描述，供 LLM 调用生图前感知。"""
+        try:
+            wardrobe = self._get_wardrobe_instance()
+            if not wardrobe:
+                return
+            assets = await wardrobe.list_assets()
+            if assets:
+                lines = [
+                    f"- {a.get('short_tag', '') or ''}（asset_id={a.get('asset_id', '') or ''}）"
+                    for a in assets
+                ]
+                pool_text = "\n".join(lines)
+            else:
+                pool_text = ""
+            self._inject_asset_pool_to_tool_doc(pool_text)
+        except Exception as e:
+            logger.debug("[aiimg] 刷新素材池到工具描述失败: %s", e)
 
     def _migrate_legacy_data(self):
         import shutil as _shutil
@@ -1583,6 +1632,8 @@ class GiteeAIImagePlugin(Star):
             output: str = "",
             use_wardrobe: bool = True,
             use_wardrobe_ref: bool = True,
+            use_asset: bool = True,
+            asset_id: str = "",
     ):
         """统一图片生成/改图/自拍工具。
 
@@ -1601,6 +1652,8 @@ class GiteeAIImagePlugin(Star):
             output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
             use_wardrobe(boolean): 仅自拍模式生效。是否使用衣橱参考图。除非用户明确说「不用衣橱」「不要衣橱」，否则永远填true。
             use_wardrobe_ref(boolean): 仅自拍模式且 use_wardrobe=true 时生效。是否使用 aiimg_wardrobe_preview 返回的衣橱参考图。当 features.selfie.wardrobe_preview_to_llm 开启时，你看图后判断参考图与用户需求不匹配可传 false 跳过该参考图（仅用人设图自拍）；关闭时或不需跳过则永远填true。
+            use_asset(boolean): 仅自拍模式生效。是否注入部位素材参考图。素材总览见 aiimg_asset_preview 工具描述中的【当前部位素材池】段落。若用户需求涉及其中某素材的局部细节，则传 true 并填对应 asset_id 注入；若无需任何部位素材（如普通全身照）则传 false。
+            asset_id(string): 仅自拍模式且 use_asset=true 时生效。要注入的部位素材ID（来自 aiimg_asset_preview 的【当前部位素材池】段落）。留空则使用最近一次 aiimg_asset_preview 精读选中的素材。
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
@@ -1645,7 +1698,7 @@ class GiteeAIImagePlugin(Star):
             task = asyncio.create_task(
                 self._async_llm_tool_generate(
                     event, prompt, m, target_backend, size, resolution, user_id,
-                    use_wardrobe, use_wardrobe_ref
+                    use_wardrobe, use_wardrobe_ref, use_asset, asset_id
                 )
             )
             self._image_tasks.add(task)
@@ -1655,7 +1708,7 @@ class GiteeAIImagePlugin(Star):
         try:
             await mark_processing(event)
             image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
-                event, prompt, m, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref
+                event, prompt, m, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref, use_asset, asset_id
             )
             return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid)
         except Exception as e:
@@ -1675,6 +1728,8 @@ class GiteeAIImagePlugin(Star):
         resolution: str | None,
         use_wardrobe: bool = True,
         use_wardrobe_ref: bool = True,
+        use_asset: bool = True,
+        asset_id: str = "",
     ) -> tuple[Path, str, str | None]:
         if m in {"selfie_ref", "selfie", "ref"}:
             logger.debug("[aiimg] route=selfie_ref (explicit)")
@@ -1685,6 +1740,7 @@ class GiteeAIImagePlugin(Star):
             image_path, used_pid = await self._generate_selfie_image(
                 event, prompt, target_backend, size=size, resolution=resolution,
                 use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
+                use_asset=use_asset, asset_id=asset_id,
             )
             return image_path, "selfie", used_pid
 
@@ -1699,6 +1755,7 @@ class GiteeAIImagePlugin(Star):
                     image_path, used_pid = await self._generate_selfie_image(
                         event, prompt, target_backend, size=size, resolution=resolution,
                         use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
+                        use_asset=use_asset, asset_id=asset_id,
                     )
                     return image_path, "selfie", used_pid
                 except Exception as e:
@@ -1761,10 +1818,13 @@ class GiteeAIImagePlugin(Star):
         user_id: str,
         use_wardrobe: bool = True,
         use_wardrobe_ref: bool = True,
+        use_asset: bool = True,
+        asset_id: str = "",
     ) -> None:
         try:
             image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
-                event, prompt, mode, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref
+                event, prompt, mode, target_backend, size, resolution,
+                use_wardrobe, use_wardrobe_ref, use_asset, asset_id
             )
             self._remember_last_image(event, image_path, mode=result_mode, prompt=prompt)
             if result_mode == "selfie":
@@ -1974,6 +2034,127 @@ class GiteeAIImagePlugin(Star):
                         )
             except Exception as e:
                 logger.warning("[wardrobe_preview] 图片注入LLM失败，回退文字描述: %s", e)
+
+        return self._build_llm_tool_text_desc_result(result_text)
+
+    @filter.llm_tool(name="aiimg_asset_preview")
+    async def aiimg_asset_preview(self, event: AstrMessageEvent, asset_id: str = ""):
+        """【自拍专用】作用同衣橱参考图，但操作的是「部位素材库」——用户上传的局部参考图（足部、袜子、鞋子、表情、配饰等特写），用于生图模型在这些局部细节上精确复刻。
+        本工具不会发送图片给用户，只返回素材信息供你参考。
+        当前部位素材池已直接附注在 aiimg_generate 工具描述的【当前部位素材池】段落中，你调用生图前即可看到全部素材的短标签与 asset_id，**无需先调用本工具获取总览**。需要注入某素材时，直接调用 aiimg_generate(mode=selfie_ref, asset_id=xxx) 即可。
+        只有当你需要查看某素材的完整描述与图片（判断是否匹配）时，才调用本工具并传入该素材的 asset_id 精读。
+        素材库是全局共享的，不区分人格。你可以根据用户需求决定是否注入素材：用户要普通照片就不注入；要丝袜/鞋子等局部细节就注入对应素材。
+        仅当 features.selfie.asset_ref_enabled 开启时可用。
+
+        ⚠️ 与衣橱参考图互斥：一旦使用本素材库注入部位素材，一般就不要再调用 aiimg_wardrobe_preview 取衣橱参考图了——额外参考图有一张就够，二者同时注入反而会互相干扰。只有在极其罕见的情况下才可能同时使用。
+
+        素材图是局部特写，大多只有一个部位（如足部），与完整人物的衣橱参考图不同。构建提示词时，素材的用法原则与衣橱一致：图里已精确呈现的不重复描述，重复反而效果更差；引用素材时在提示词中精准引用对应序号，并注明"参考图N"的细节来源。
+
+        Args:
+            asset_id(string): 素材ID。传入某个 asset_id 时返回该素材的完整描述与图片；留空则返回当前素材库的最新总览（通常无需调用，仅作兜底刷新）。
+        """
+        selfie_conf = self._get_feature("selfie")
+        if not selfie_conf.get("asset_ref_enabled", False):
+            return self._build_llm_tool_text_desc_result(
+                "部位素材参考图功能未开启（features.selfie.asset_ref_enabled=false）"
+            )
+
+        if not self._is_selfie_enabled() or not self._is_selfie_llm_enabled():
+            return self._build_llm_tool_text_desc_result("自拍功能已关闭")
+
+        wardrobe = self._get_wardrobe_instance()
+        if not wardrobe:
+            return self._build_llm_tool_text_desc_result(
+                "衣橱插件未安装或未启用，无法获取部位素材"
+            )
+
+        # 每次调用时刷新素材池到工具描述，保证之后 LLM 调用生图前能看到最新素材池
+        await self._refresh_asset_pool_in_tool_doc()
+
+        asset_id = (asset_id or "").strip()
+
+        # 总览模式（兜底）：返回最新素材列表，供 LLM 刷新感知
+        if not asset_id:
+            try:
+                assets = await wardrobe.list_assets()
+            except Exception as e:
+                logger.warning("[asset_preview] 素材总览获取失败: %s", e)
+                return self._build_llm_tool_text_desc_result(f"素材总览获取失败: {e}")
+            if not assets:
+                return self._build_llm_tool_text_desc_result(
+                    "部位素材库为空。你可以直接调用 aiimg_generate(mode=selfie_ref) 使用人设参考图自拍，无需注入部位素材。"
+                )
+            lines = [f"[{a.get('asset_id', '')}] {a.get('short_tag', '')}" for a in assets]
+            body = "\n".join(lines)
+            result_text = (
+                "部位素材库最新总览（全局共享，不区分人格）：\n"
+                f"{body}\n\n"
+                "如需注入某个素材，用其 asset_id 再次调用本工具获取完整描述与图片，或直接调用 aiimg_generate(mode=selfie_ref, asset_id=xxx) 注入。"
+                "若用户需求不需要任何部位素材（如普通全身照），则不必注入，直接调用 aiimg_generate(mode=selfie_ref)。"
+            )
+            return self._build_llm_tool_text_desc_result(result_text)
+
+        # 精读模式：返回单个素材的完整描述与图片
+        try:
+            detail = await wardrobe.get_asset_detail(asset_id)
+        except Exception as e:
+            logger.warning("[asset_preview] 素材详情获取失败: %s", e)
+            return self._build_llm_tool_text_desc_result(f"素材详情获取失败: {e}")
+
+        if not detail:
+            return self._build_llm_tool_text_desc_result(
+                f"未找到素材（asset_id={asset_id}）。请先用不带 asset_id 的方式获取总览列表，或调用 aiimg_generate(mode=selfie_ref) 使用人设参考图自拍。"
+            )
+
+        user_id = str(event.get_sender_id() or "")
+        if user_id:
+            self._asset_preview_cache[user_id] = detail
+
+        persona_name = await self._get_current_persona_name(event)
+        persona_ref_count = 0
+        if persona_name:
+            persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
+
+        # 素材总在人设参考图之后注入；若有衣橱参考图则在其后一位
+        base_index = persona_ref_count + 1
+        no_wardrobe_index = base_index
+        with_wardrobe_index = base_index + 1
+
+        description = detail.get("description", "") or ""
+        short_tag = detail.get("short_tag", "") or ""
+
+        result_text = (
+            f"部位素材已选中「{short_tag}」（asset_id={asset_id}），图片随附：\n"
+            f"{description}\n\n"
+            f"该素材将作为额外参考图注入。其序号取决于是否使用衣橱参考图：\n"
+            f"- 不使用衣橱参考图（aiimg_generate 传 use_wardrobe=false 或 use_wardrobe_ref=false）→ 该素材为 参考图{no_wardrobe_index}\n"
+            f"- 使用衣橱参考图 → 该素材为 参考图{with_wardrobe_index}\n\n"
+            f"⚠️ 注意：用了本素材后，一般就不要再调用 aiimg_wardrobe_preview 取衣橱参考图了，一张额外参考图就够，二者同时注入反而互相干扰。\n\n"
+            f"前{persona_ref_count}张参考图是人设图。构建提示词时，请根据你最终为 aiimg_generate 传入的衣橱参数选择对应的参考图序号，"
+            f"并精准引用该素材的细节（如参考图对应序号所示部位），图里已精确呈现的不重复描述。"
+            f"然后调用对应的自拍skill构建提示词，调用 aiimg_generate(mode=selfie_ref, use_asset=true, asset_id={asset_id})。"
+        )
+
+        try:
+            image_path = Path(detail.get("image_path", ""))
+            if image_path.exists():
+                compressed_bytes = await asyncio.to_thread(
+                    self._compress_for_llm_context, image_path, max_side=2048, quality=85
+                )
+                if compressed_bytes:
+                    b64_data = base64.b64encode(compressed_bytes).decode("utf-8")
+                    return mcp.types.CallToolResult(
+                        content=[
+                            mcp.types.TextContent(type="text", text=result_text),
+                            mcp.types.ImageContent(
+                                type="image",
+                                data=b64_data,
+                                mimeType="image/jpeg",
+                            ),
+                        ]
+                    )
+        except Exception as e:
+            logger.warning("[asset_preview] 图片注入LLM失败，回退文字描述: %s", e)
 
         return self._build_llm_tool_text_desc_result(result_text)
 
@@ -3278,6 +3459,8 @@ class GiteeAIImagePlugin(Star):
             resolution: str | None = None,
             use_wardrobe: bool = True,
             use_wardrobe_ref: bool = True,
+            use_asset: bool = True,
+            asset_id: str = "",
     ) -> tuple[Path, str | None]:
         persona_name = await self._get_current_persona_name(event)
         if not persona_name:
@@ -3335,6 +3518,40 @@ class GiteeAIImagePlugin(Star):
             self._wardrobe_preview_cache.pop(user_id, None)
             logger.debug("[selfie] LLM 主动跳过衣橱参考图（use_wardrobe_ref=false）")
 
+        # 部位素材参考图注入（追加在人设图/衣橱图之后）
+        asset_ref_added = False
+        if use_asset and selfie_conf.get("asset_ref_enabled", False):
+            user_id = str(event.get_sender_id() or "")
+            asset = None
+            asset_id = (asset_id or "").strip()
+            if asset_id:
+                wardrobe = self._get_wardrobe_instance()
+                if wardrobe:
+                    try:
+                        asset = await wardrobe.get_asset_detail(asset_id)
+                    except Exception as e:
+                        logger.warning("[selfie] 素材详情获取失败，跳过: %s", e)
+                        asset = None
+            else:
+                asset = self._asset_preview_cache.pop(user_id, None)
+            if asset:
+                asset_path = Path(asset.get("image_path", ""))
+                if asset_path.exists():
+                    ref_paths.append(asset_path)
+                    asset_ref_added = True
+                    logger.debug(
+                        "[selfie] 已追加部位素材参考图: asset_id=%s short_tag=%s",
+                        asset.get("asset_id", "未知"),
+                        asset.get("short_tag", "未知"),
+                    )
+                else:
+                    logger.warning("[selfie] 素材图片文件不存在，跳过: %s", asset_path)
+            else:
+                logger.debug("[selfie] 无可用部位素材，跳过")
+        else:
+            user_id = str(event.get_sender_id() or "")
+            self._asset_preview_cache.pop(user_id, None)
+
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
             raise RuntimeError(
@@ -3356,10 +3573,10 @@ class GiteeAIImagePlugin(Star):
         extra_bytes = await self._image_segs_to_bytes(extra_segs)
         images = [*ref_images, *extra_bytes]
 
-        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0), prompt_prefix=prompt_prefix)
+        final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0) + (1 if asset_ref_added else 0), prompt_prefix=prompt_prefix)
 
-        # 有衣橱参考图或用户图时，按后端类型用分辨率档位覆盖（4K/1K），走方式1让模型看prompt里的宽高比描述
-        has_ref_image = wardrobe_ref_added or len(extra_bytes) > 0
+        # 有衣橱参考图、部位素材或用户图时，按后端类型用分辨率档位覆盖（4K/1K），走方式1让模型看prompt里的宽高比描述
+        has_ref_image = wardrobe_ref_added or asset_ref_added or len(extra_bytes) > 0
         if has_ref_image:
             ref_resolution = self._resolve_selfie_ref_resolution(backend, chain_override)
             if ref_resolution:
