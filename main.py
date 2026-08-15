@@ -1632,7 +1632,7 @@ class GiteeAIImagePlugin(Star):
             output: str = "",
             use_wardrobe: bool = True,
             use_wardrobe_ref: bool = True,
-            use_asset: bool = True,
+            use_asset: bool = False,
             asset_id: str = "",
     ):
         """统一图片生成/改图/自拍工具。
@@ -1652,8 +1652,8 @@ class GiteeAIImagePlugin(Star):
             output(string): 输出尺寸/分辨率。例: 2048x2048 或 4K（留空用默认）
             use_wardrobe(boolean): 仅自拍模式生效。是否使用衣橱参考图。除非用户明确说「不用衣橱」「不要衣橱」，否则永远填true。
             use_wardrobe_ref(boolean): 仅自拍模式且 use_wardrobe=true 时生效。是否使用 aiimg_wardrobe_preview 返回的衣橱参考图。当 features.selfie.wardrobe_preview_to_llm 开启时，你看图后判断参考图与用户需求不匹配可传 false 跳过该参考图（仅用人设图自拍）；关闭时或不需跳过则永远填true。
-            use_asset(boolean): 仅自拍模式生效。是否注入部位素材参考图。素材总览见 aiimg_asset_preview 工具描述中的【当前部位素材池】段落。若用户需求涉及其中某素材的局部细节，则传 true 并填对应 asset_id 注入；若无需任何部位素材（如普通全身照）则传 false。
-            asset_id(string): 仅自拍模式且 use_asset=true 时生效。要注入的部位素材ID（来自 aiimg_asset_preview 的【当前部位素材池】段落）。留空则使用最近一次 aiimg_asset_preview 精读选中的素材。
+            use_asset(boolean): 仅自拍模式生效。是否注入部位素材参考图。素材总览见 aiimg_asset_preview 工具描述中的【当前部位素材池】段落。**注入前必须先调用 aiimg_asset_preview(asset_id) 看过该素材的真实图片与描述，确认匹配后才能注入**；若无需任何部位素材（如普通全身照）则传 false。
+            asset_id(string): 仅自拍模式且 use_asset=true 时生效。要注入的部位素材ID（来自 aiimg_asset_preview 的【当前部位素材池】段落，且必须已通过 aiimg_asset_preview 看过该素材）。禁止凭 asset_id 或短标签编造素材细节。
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
@@ -2039,11 +2039,10 @@ class GiteeAIImagePlugin(Star):
 
     @filter.llm_tool(name="aiimg_asset_preview")
     async def aiimg_asset_preview(self, event: AstrMessageEvent, asset_id: str = ""):
-        """【自拍专用】作用同衣橱参考图，但操作的是「部位素材库」——用户上传的局部参考图（足部、袜子、鞋子、表情、配饰等特写），用于生图模型在这些局部细节上精确复刻。
+        """【自拍专用】作用同衣橱参考图，但操作的是「部位素材库」——用户上传的局部参考图（足部、袜子等特写），用于生图模型在这些局部细节上精确复刻。
         本工具不会发送图片给用户，只返回素材信息供你参考。
-        当前部位素材池已直接附注在 aiimg_generate 工具描述的【当前部位素材池】段落中，你调用生图前即可看到全部素材的短标签与 asset_id，**无需先调用本工具获取总览**。需要注入某素材时，直接调用 aiimg_generate(mode=selfie_ref, asset_id=xxx) 即可。
-        只有当你需要查看某素材的完整描述与图片（判断是否匹配）时，才调用本工具并传入该素材的 asset_id 精读。
-        素材库是全局共享的，不区分人格。你可以根据用户需求决定是否注入素材：用户要普通照片就不注入；要丝袜/鞋子等局部细节就注入对应素材。
+        当前部位素材池已附注在 aiimg_generate 工具描述的【当前部位素材池】段落中，用于快速发现有哪些素材可选。**但素材是图片，短标签不足以还原细节——选定某素材后，必须先调用本工具（带 asset_id）查看该素材的真实图片与完整描述，确认匹配后才能注入**。禁止仅凭 asset_id 或短标签直接注入，更禁止凭空编造素材内容（如推测丝袜颜色/款式）。
+        素材库是全局共享的，不区分人格。你可以根据用户需求决定是否注入素材：用户要普通照片就不注入；要丝袜等局部细节就注入对应素材。
         仅当 features.selfie.asset_ref_enabled 开启时可用。
 
         ⚠️ 与衣橱参考图互斥：一旦使用本素材库注入部位素材，一般就不要再调用 aiimg_wardrobe_preview 取衣橱参考图了——额外参考图有一张就够，二者同时注入反而会互相干扰。只有在极其罕见的情况下才可能同时使用。
@@ -2051,7 +2050,7 @@ class GiteeAIImagePlugin(Star):
         素材图是局部特写，大多只有一个部位（如足部），与完整人物的衣橱参考图不同。构建提示词时，素材的用法原则与衣橱一致：图里已精确呈现的不重复描述，重复反而效果更差；引用素材时在提示词中精准引用对应序号，并注明"参考图N"的细节来源。
 
         Args:
-            asset_id(string): 素材ID。传入某个 asset_id 时返回该素材的完整描述与图片；留空则返回当前素材库的最新总览（通常无需调用，仅作兜底刷新）。
+            asset_id(string): 素材ID。传入某个 asset_id 时返回该素材的完整描述与图片（注入前必须调用）；留空则返回当前素材库的最新总览。
         """
         selfie_conf = self._get_feature("selfie")
         if not selfie_conf.get("asset_ref_enabled", False):
@@ -3459,7 +3458,7 @@ class GiteeAIImagePlugin(Star):
             resolution: str | None = None,
             use_wardrobe: bool = True,
             use_wardrobe_ref: bool = True,
-            use_asset: bool = True,
+            use_asset: bool = False,
             asset_id: str = "",
     ) -> tuple[Path, str | None]:
         persona_name = await self._get_current_persona_name(event)
@@ -3522,18 +3521,27 @@ class GiteeAIImagePlugin(Star):
         asset_ref_added = False
         if use_asset and selfie_conf.get("asset_ref_enabled", False):
             user_id = str(event.get_sender_id() or "")
-            asset = None
             asset_id = (asset_id or "").strip()
+            cached = self._asset_preview_cache.get(user_id) or {}
+            cached_asset_id = str(cached.get("asset_id", "") or "")
+
+            # 非法注入拦截：use_asset=true 必须已通过 aiimg_asset_preview 查看过对应素材，禁止直接注入
             if asset_id:
-                wardrobe = self._get_wardrobe_instance()
-                if wardrobe:
-                    try:
-                        asset = await wardrobe.get_asset_detail(asset_id)
-                    except Exception as e:
-                        logger.warning("[selfie] 素材详情获取失败，跳过: %s", e)
-                        asset = None
+                if cached_asset_id != asset_id:
+                    raise RuntimeError(
+                        f"非法注入部位素材：use_asset=true 且指定 asset_id={asset_id}，但你未先调用 "
+                        f"aiimg_asset_preview(asset_id={asset_id}) 查看该素材的真实图片与描述。"
+                        f"请先调用 aiimg_asset_preview 确认匹配后，再重新构建提示词调用 aiimg_generate(mode=selfie_ref) 注入。"
+                    )
+                asset = cached
             else:
+                if not cached_asset_id:
+                    raise RuntimeError(
+                        "非法注入部位素材：use_asset=true 但你未先调用 aiimg_asset_preview 查看素材。"
+                        "请先调用 aiimg_asset_preview(asset_id=xxx) 确认匹配后，再重新构建提示词调用 aiimg_generate(mode=selfie_ref) 注入。"
+                    )
                 asset = self._asset_preview_cache.pop(user_id, None)
+
             if asset:
                 asset_path = Path(asset.get("image_path", ""))
                 if asset_path.exists():
