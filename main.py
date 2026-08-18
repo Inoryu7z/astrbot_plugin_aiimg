@@ -460,6 +460,9 @@ class GiteeAIImagePlugin(Star):
             return False
         err_repr = repr(exc).lower()
         err_str = str(exc).lower()
+        # 确定性失败（文件不存在等）不是"可能已送达"，必须回退而不是视为成功
+        if "enoent" in err_repr or "enoent" in err_str or "no such file" in err_str:
+            return False
         return (
             "timeout" in err_repr
             or "timeout" in err_str
@@ -1916,8 +1919,12 @@ class GiteeAIImagePlugin(Star):
 
         self._video_tasks.add(task)
         task.add_done_callback(lambda t: self._video_tasks.discard(t))
-
-        return None
+        return mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(
+                type="text",
+                text="视频生成任务已开始，完成后会自动发送给用户，无需调用 send_message_to_user。请以符合你人设的口吻告知用户视频正在生成中。",
+            )]
+        )
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
@@ -2422,6 +2429,11 @@ class GiteeAIImagePlugin(Star):
                 video_path = await self.videomgr.download_video(
                     url, timeout_seconds=download_timeout
                 )
+                if not video_path.exists():
+                    logger.warning(
+                        "[视频] 本地视频文件不存在，回退其他发送方式: %s", video_path
+                    )
+                    return False
                 await asyncio.wait_for(
                     event.send(
                         event.chain_result([Video(file=f"file://{str(video_path)}", path=str(video_path))])
@@ -2463,10 +2475,10 @@ class GiteeAIImagePlugin(Star):
             await event.send(event.plain_result(video_url))
             return
 
-        # auto: prefer file first (most platforms won't render URL as playable video)
-        if await _send_file(video_url):
-            return
+        # auto: prefer URL first（后端 URL 通常长期有效，直接发最快；失败再下载本地）
         if await _send_url(video_url):
+            return
+        if await _send_file(video_url):
             return
         await event.send(event.plain_result(video_url))
 
