@@ -1725,8 +1725,8 @@
       },
       "official_grok_video": {
         "name": "官方 Grok（视频）",
-        "description": "xAI 官方 Grok 视频生成后端，JSON body 协议，POST /v1/videos/generations。仅适用于完全兼容 xAI 官方协议的端点。",
-        "hint": "仅对 features.video.chain 生效。server_url 填 https://api.x.ai 或完全兼容官方 /v1/videos/generations 协议的代理。不兼容 multipart 协议（s.apifox 410343373 / poloapi 422941674e0 请用 grok_video_multipart 后端）。",
+        "description": "xAI 官方 Grok 视频生成后端（JSON 协议）。",
+        "hint": "server_url 填官方地址或完全兼容官方协议的代理。",
         "items": {
           "id": {
             "type": "string",
@@ -1831,8 +1831,8 @@
       },
       "truegrok": {
         "name": "级联后端（True Grok）",
-        "description": "级联模板：按顺序尝试多个同类型后端（图片或视频），失败自动切换下一个。",
-        "hint": "图片级联（如多个 openai images）与视频级联（如多个豆包 Seedance）都用本模板：fallback_chain 内填同类型后端的 ID。kind 会自动根据 fallback_chain 推断，也可手动选择。不支持图片与视频混用，也不支持嵌套级联。",
+        "description": "级联模板：多个同类型后端按顺序尝试，失败自动切换。",
+        "hint": "fallback_chain 填同类型后端 ID（图片或视频皆可，最多 3 个，不支持混用）。",
         "items": {
           "id": {
             "type": "string",
