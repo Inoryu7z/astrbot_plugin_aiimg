@@ -1087,7 +1087,7 @@
       "ark_seedream": {
         "name": "Ark Seedream",
         "description": "ByteDance ARK Seedream 系列专用（Seedream 5.0 pro 等）。",
-        "hint": "与 OpenAI ImagesURL 行为一致，但改图时不会发送 sequential_image_generation 参数（Seedream 5.0 pro 不支持）。full_generate_url/full_edit_url 需填写完整 URL（含路径）。",
+        "hint": "与 OpenAI ImagesURL 一致，但改图不发送 sequential_image_generation 参数。full_generate_url/full_edit_url 填完整 URL。",
         "items": {
           "id": {
             "type": "string",
@@ -1630,8 +1630,8 @@
       },
       "grok_video_multipart": {
         "name": "Grok Video（multipart 中转站）",
-        "description": "Grok 视频生成 - multipart/form-data 协议，POST /v1/videos。对应文档：s.apifox 410343373、poloapi 422941674e0。适用于 s.apifox、PoloAI 等中转站。",
-        "hint": "仅对 features.video.chain 生效。支持 grok-video-3(6s) / grok-video-3-pro(10s) / grok-video-3-max(15s)。注意：此为 multipart 协议，与官方 /v1/videos/generations（JSON）不兼容，勿混淆。",
+        "description": "Grok 视频生成（multipart 协议，适用于 s.apifox / PoloAI 等中转站）。",
+        "hint": "支持 grok-video-3(6s) / -pro(10s) / -max(15s)。multipart 协议，与官方 JSON 接口不兼容。",
         "items": {
           "id": {
             "type": "string",
