@@ -99,7 +99,9 @@
 
 **图片类**：OpenAI Images、OpenAI ImagesURL、Ark Seedream（Seedream 5.0 pro 专用，修复该模型改图 HTTP 400）、OpenAI Chat 图、Gemini Images、Gitee Images、Gitee 异步改图、即梦（豆包）
 
-**视频类**：Grok Video（multipart 中转站）、官方 Grok（视频）、True Grok（级联，最多 3 个 fallback）、豆包 Seedance
+**视频类**：Grok Video（multipart 中转站）、官方 Grok（视频）、豆包 Seedance
+
+**级联后端**：True Grok（图片或视频皆可，fallback_chain 内最多 3 个同类型后端，依次调用失败自动顺延；kind 自动推断，不支持图片与视频混用、不支持嵌套级联）
 
 每个服务商均可单独配置 API Key 池、超时、代理、自定义 User-Agent、独立输出分辨率等。功能链路（文生图/改图/自拍/视频）按顺序兜底，主用失败自动切换。
 

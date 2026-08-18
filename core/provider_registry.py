@@ -139,8 +139,30 @@ class ProviderRegistry:
         "official_grok_video", "grok2api_video", "flow2api_video", "truegrok",
     })
 
+    def _infer_cascade_kind(self, conf: dict) -> str:
+        """根据 fallback_chain 内已注册 provider 的 kind 推断级联类型。
+
+        - 全部为图片后端 → "image"
+        - 全部为视频后端 → "video"
+        - 空 / 混合 / 引用未注册 → "video"（validate 阶段会给出明确报错）
+        """
+        chain_ids = [
+            str(pid).strip()
+            for pid in _as_list(conf.get("fallback_chain"))
+            if str(pid).strip()
+        ]
+        kinds: set[str] = set()
+        for cid in chain_ids:
+            ref = self._providers.get(cid)
+            if ref:
+                kinds.add(str(ref.get("kind") or "").strip())
+        if kinds == {"image"}:
+            return "image"
+        return "video"
+
     def _load_providers(self) -> None:
         raw = _as_list(self._config.get("providers"))
+        pending: list[tuple[str, dict]] = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -156,8 +178,26 @@ class ProviderRegistry:
             template_key = self._resolve_template_key(normalized)
             if template_key:
                 normalized["__template_key"] = template_key
-            if not str(normalized.get("kind") or "").strip():
-                normalized["kind"] = "video" if template_key in self._VIDEO_TEMPLATE_KEYS else "image"
+            if template_key == "truegrok":
+                # 级联类型依赖 fallback_chain 内 provider 的 kind，需第二遍判定
+                explicit_kind = str(normalized.get("kind") or "").strip()
+                if explicit_kind in ("image", "video"):
+                    self._providers[provider_id] = normalized
+                else:
+                    normalized["kind"] = ""
+                    pending.append((provider_id, normalized))
+            else:
+                if not str(normalized.get("kind") or "").strip():
+                    normalized["kind"] = "video" if template_key in self._VIDEO_TEMPLATE_KEYS else "image"
+                self._providers[provider_id] = normalized
+
+        # 第二遍：级联（truegrok）provider 的 kind 依赖 chain 内 provider，延迟判定
+        for provider_id, normalized in pending:
+            if (
+                normalized.get("__template_key") == "truegrok"
+                and not str(normalized.get("kind") or "").strip()
+            ):
+                normalized["kind"] = self._infer_cascade_kind(normalized)
             self._providers[provider_id] = normalized
 
     def validate(self) -> list[str]:
@@ -190,6 +230,47 @@ class ProviderRegistry:
             if not template_key:
                 errors.append(f"providers[{idx}].__template_key is required")
                 continue
+
+            # 级联后端（truegrok）校验：chain 非空、引用存在、类型一致、不支持嵌套
+            if template_key == "truegrok":
+                chain_ids = [
+                    str(pid).strip()
+                    for pid in _as_list(item.get("fallback_chain"))
+                    if str(pid).strip()
+                ]
+                if not chain_ids:
+                    errors.append(
+                        f"provider '{provider_id}' 级联后端 fallback_chain 不能为空"
+                    )
+                    continue
+                if len(chain_ids) > 3:
+                    errors.append(
+                        f"provider '{provider_id}' 级联后端 fallback_chain 最多 3 个"
+                    )
+                kinds: set[str] = set()
+                for cid in chain_ids:
+                    ref = self.get(cid)
+                    if ref is None:
+                        errors.append(
+                            f"provider '{provider_id}' fallback_chain 引用了不存在的 provider '{cid}'"
+                        )
+                        continue
+                    ref_key = str(ref.get("__template_key") or "").strip()
+                    if ref_key == "truegrok":
+                        errors.append(
+                            f"provider '{provider_id}' 不支持嵌套级联（fallback_chain 内不能是另一个级联后端）"
+                        )
+                        continue
+                    kinds.add(str(ref.get("kind") or "").strip())
+                if len(kinds) > 1:
+                    errors.append(
+                        f"provider '{provider_id}' 级联后端不支持生图与视频混用，fallback_chain 内必须全为图片后端或全为视频后端"
+                    )
+                explicit_kind = str(item.get("kind") or "").strip()
+                if explicit_kind in ("image", "video") and kinds and explicit_kind not in kinds:
+                    errors.append(
+                        f"provider '{provider_id}' kind={explicit_kind} 与 fallback_chain 实际类型 {sorted(kinds)} 冲突"
+                    )
 
             # Minimal required fields per provider type.
             if template_key in {
@@ -336,6 +417,14 @@ class ProviderRegistry:
         return backend
 
     def _build_backend(self, pid: str, template_key: str, conf: dict) -> object:
+        if template_key == "truegrok":
+            if str(conf.get("kind") or "").strip() != "image":
+                raise RuntimeError(
+                    f"Provider '{pid}' 是视频级联后端，请在视频链路（get_video_backend）中使用"
+                )
+            from .cascade import TrueGrokImageService
+            return TrueGrokImageService(registry=self, provider=conf)
+
         if template_key == "gemini_native":
             settings = {
                 "api_url": conf.get("api_url"),
@@ -606,6 +695,10 @@ class ProviderRegistry:
             backend = Flow2ApiVideoBackend(settings=settings)
         elif template_key == "truegrok":
             from .grok_video_service import TrueGrokVideoService
+            if str(p.get("kind") or "").strip() != "video":
+                raise RuntimeError(
+                    f"Provider '{pid}' 是图片级联后端，请在图片链路（get_backend）中使用"
+                )
             backend = TrueGrokVideoService(registry=self, provider=p)
         else:
             raise RuntimeError(f"Provider '{pid}' is not a video provider")

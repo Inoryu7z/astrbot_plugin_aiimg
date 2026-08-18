@@ -1830,9 +1830,9 @@
         }
       },
       "truegrok": {
-        "name": "True Grok（级联）",
-        "description": "级联视频模板：按顺序尝试多个视频服务商，失败自动切换下一个。",
-        "hint": "典型用法：便宜的后端 → 贵但稳定的后端，省钱同时保成功。也可配合多模型级联（在后端配置 models 字段）实现更细粒度的 fallback。",
+        "name": "级联后端（True Grok）",
+        "description": "级联模板：按顺序尝试多个同类型后端（图片或视频），失败自动切换下一个。",
+        "hint": "图片级联（如多个 openai images）与视频级联（如多个豆包 Seedance）都用本模板：fallback_chain 内填同类型后端的 ID。kind 会自动根据 fallback_chain 推断，也可手动选择。不支持图片与视频混用，也不支持嵌套级联。",
         "items": {
           "id": {
             "type": "string",
@@ -1846,16 +1846,17 @@
           },
           "kind": {
             "type": "string",
-            "description": "类型（固定为 video）",
+            "description": "类型（自动推断：fallback_chain 全为图片后端则 image，全为视频后端则 video）",
             "default": "video",
             "options": [
+              "image",
               "video"
             ]
           },
           "fallback_chain": {
             "type": "list",
-            "description": "级联服务商 ID 列表（最多3个，按顺序尝试）",
-            "hint": "填已配置的视频服务商 ID，如 [\"grok_video_multipart\", \"official_grok_video\"]",
+            "description": "级联后端 ID 列表（最多3个，按顺序尝试，必须同为图片或同为视频）",
+            "hint": "图片级联如 [\"openai_a\", \"openai_b\"]；视频级联如 [\"seedance_a\", \"seedance_b\"]",
             "default": []
           }
         }
