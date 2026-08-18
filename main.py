@@ -1901,30 +1901,28 @@ class GiteeAIImagePlugin(Star):
             prefetched_bytes = None
             if not image_url:
                 prefetched_bytes, _ = await self._prefetch_image_from_event(event)
-            task = asyncio.create_task(
-                self._async_generate_video(
-                    event,
-                    extra_prompt,
-                    user_id,
-                    provider_id=provider_override,
-                    llm_tool_failure=True,
-                    image_url=image_url,
-                    prefetched_image_bytes=prefetched_bytes,
-                )
+            # 同步等待视频生成与发送完成，返回成败标志
+            success = await self._async_generate_video(
+                event,
+                extra_prompt,
+                user_id,
+                provider_id=provider_override,
+                llm_tool_failure=True,
+                image_url=image_url,
+                prefetched_image_bytes=prefetched_bytes,
             )
         except Exception:
             await self._video_end(user_id)
-            await self._signal_llm_tool_failure(event)
-            return self._build_llm_tool_failure_result("视频生成任务创建失败")
+            return self._build_llm_tool_failure_result("视频生成任务失败")
 
-        self._video_tasks.add(task)
-        task.add_done_callback(lambda t: self._video_tasks.discard(t))
-        return mcp.types.CallToolResult(
-            content=[mcp.types.TextContent(
-                type="text",
-                text="视频生成任务已开始，完成后会自动发送给用户，无需调用 send_message_to_user。请以符合你人设的口吻告知用户视频正在生成中。",
-            )]
-        )
+        if success:
+            return mcp.types.CallToolResult(
+                content=[mcp.types.TextContent(
+                    type="text",
+                    text="视频已发送给用户，无需调用 send_message_to_user。请以符合你人设的口吻告知用户视频已生成。",
+                )]
+            )
+        return self._build_llm_tool_failure_result("视频生成或发送失败，请告知用户")
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
@@ -2619,11 +2617,8 @@ class GiteeAIImagePlugin(Star):
                 )
 
             if had_image and not image_bytes:
-                if llm_tool_failure:
-                    await self._signal_llm_tool_failure(event)
-                else:
-                    await mark_failed(event)
-                return
+                await mark_failed(event)
+                return False
 
             t_start = time.perf_counter()
             candidates = (
@@ -2663,13 +2658,12 @@ class GiteeAIImagePlugin(Star):
             t_end = time.perf_counter()
             name = used_pid or "video"
             logger.info(f"[视频] 完成: provider={name}, 耗时={t_end - t_start:.2f}s")
+            return True
 
         except Exception as e:
             logger.error(f"[视频] 失败: {e}", exc_info=True)
-            if llm_tool_failure:
-                await self._signal_llm_tool_failure(event)
-            else:
-                await mark_failed(event)
+            await mark_failed(event)
+            return False
         finally:
             await self._video_end(user_id)
 
