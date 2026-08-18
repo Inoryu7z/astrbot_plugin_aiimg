@@ -666,7 +666,9 @@ class DoubaoSeedanceService:
                 
                 if status == "succeeded":
                     video_url = data.get("content", {}).get("video_url")
-                    if video_url: return video_url
+                    if video_url:
+                        logger.info(f"[DoubaoVideo] 视频生成成功: task_id={task_id} url={video_url}")
+                        return video_url
                     raise RuntimeError("任务成功但无 video_url")
                 elif status == "failed":
                     err = data.get("error", {})
