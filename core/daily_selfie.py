@@ -2291,7 +2291,9 @@ class DailySelfieService:
             f"风格：{style}\n"
             f"场景：{scene}\n"
             f"参考图力度：{ref_strength}\n"
-            "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图）"
+            "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图）\n"
+            "注意：衣橱参考图可能与目标风格或场景不完全一致，仅作款式灵感参考；"
+            "若与上方风格、场景文字冲突，一律以风格和场景文字为准，不要被参考图的细节带偏。"
         )
 
         effective_prompt = system_prompt or _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT
