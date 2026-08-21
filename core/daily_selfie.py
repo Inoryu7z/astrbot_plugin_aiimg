@@ -2083,7 +2083,7 @@ class DailySelfieService:
                         image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
-                    timeout=360,
+                    timeout=600,
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
@@ -2234,7 +2234,7 @@ class DailySelfieService:
                         image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
-                    timeout=360,
+                    timeout=600,
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
@@ -2262,8 +2262,8 @@ class DailySelfieService:
                     )
                 return parsed
             except asyncio.TimeoutError:
-                logger.error("[DailySelfie] r4提示词调用超时(360s)(重试%d/2)%s", attempt + 1, "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "")
-                self._record_debug("ERROR", f"r4提示词调用超时(360s)(重试{attempt + 1}/2)")
+                logger.error("[DailySelfie] r4提示词调用超时(600s)(重试%d/2)%s", attempt + 1, "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "")
+                self._record_debug("ERROR", f"r4提示词调用超时(600s)(重试{attempt + 1}/2)")
                 if attempt == 0:
                     logger.debug("[DailySelfie] r4提示词超时，重试一次")
                     continue
@@ -2306,7 +2306,7 @@ class DailySelfieService:
                         image_urls=current_images,
                         system_prompt=effective_prompt,
                     ),
-                    timeout=360,
+                    timeout=600,
                 )
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
@@ -2321,11 +2321,11 @@ class DailySelfieService:
                 return text
             except asyncio.TimeoutError:
                 logger.error(
-                    "[DailySelfie] r4有图提示词超时(360s)(重试%d/2)%s",
+                    "[DailySelfie] r4有图提示词超时(600s)(重试%d/2)%s",
                     attempt + 1,
                     "，回退为纯文本描述重试" if (ref_images and attempt == 0) else "",
                 )
-                self._record_debug("ERROR", f"r4有图提示词超时(360s)(重试{attempt + 1}/2)")
+                self._record_debug("ERROR", f"r4有图提示词超时(600s)(重试{attempt + 1}/2)")
                 if attempt == 0:
                     continue
                 return ""
