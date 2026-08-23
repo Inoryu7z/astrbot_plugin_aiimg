@@ -1184,7 +1184,7 @@ class DailySelfieService:
         # _process_design_batch 顶层 try/except 已保证单批次异常返回 (0,0,{},[]) ）
         batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
-        failed_items: list[tuple[str, str, str]] = []
+        failed_items: list[tuple[str, str, str, str]] = []
         provider_success: dict[str, list[Path]] = {}
 
         for idx, br in enumerate(batch_results):
@@ -1235,7 +1235,7 @@ class DailySelfieService:
             )
 
             if retry_enabled:
-                for prompt_text, ref_path, ref_strength in failed_items:
+                for prompt_text, ref_path, ref_strength, ref_user_tags in failed_items:
                     selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
                     if selected_pid is None:
                         logger.debug("[DailySelfie] 人格 %s 重试时所有提供商额度用完，停止", persona_name)
@@ -1261,7 +1261,7 @@ class DailySelfieService:
                         )
                         if image_path:
                             logger.debug("[DailySelfie] 人格 %s 重试成功: %s provider=%s", persona_name, image_path, selected_pid)
-                            await self._save_to_wardrobe(image_path, persona_name, prompt=prompt_text)
+                            await self._save_to_wardrobe(image_path, persona_name, prompt=prompt_text, ref_user_tags=ref_user_tags)
                             provider_success.setdefault(selected_pid, []).append(image_path)
                             success += 1
                             fail -= 1
@@ -1308,6 +1308,7 @@ class DailySelfieService:
         ref_strength: str,
         persona: dict,
         provider_id: str = "",
+        ref_user_tags: str = "",
     ) -> Path | None:
         logger.debug("[DailySelfie] 人格 %s 开始画图: provider=%s ref=%s prompt_len=%d", persona_name, provider_id, ref_image_path[:50] if ref_image_path else "空", len(prompt))
         try:
@@ -1324,7 +1325,7 @@ class DailySelfieService:
             )
             if image_path:
                 logger.info("[DailySelfie] 人格 %s 补画成功: %s", persona_name, image_path)
-                await self._save_to_wardrobe(image_path, persona_name, prompt=prompt)
+                await self._save_to_wardrobe(image_path, persona_name, prompt=prompt, ref_user_tags=ref_user_tags)
                 return image_path
             else:
                 logger.warning("[DailySelfie] 人格 %s 补画返回空路径", persona_name)
@@ -1344,7 +1345,7 @@ class DailySelfieService:
         selfie_conf = self.plugin._get_feature("selfie")
         return bool(selfie_conf.get("daily_selfie_retry_on_fail", True))
 
-    async def _save_to_wardrobe(self, image_path: Path, persona_name: str, prompt: str = "") -> None:
+    async def _save_to_wardrobe(self, image_path: Path, persona_name: str, prompt: str = "", ref_user_tags: str = "") -> None:
         wardrobe = self.plugin._get_wardrobe_instance()
         if not wardrobe or not hasattr(wardrobe, "_save_image_from_bytes"):
             return
@@ -1354,8 +1355,11 @@ class DailySelfieService:
                 image_bytes = await f.read()
             if not image_bytes:
                 return
+            # 若本张补画图调用了衣橱参考图，则把该参考图的用户备注(user_tags)透传入库，
+            # 使新图继承同样的备注。参考图无备注时为空，不影响原有行为。
             image_id, attrs, duplicate = await wardrobe._save_image_from_bytes(
                 image_bytes, persona=persona_name, created_by="daily_selfie", ai_prompt=prompt or "",
+                user_description=ref_user_tags,
             )
             if duplicate:
                 logger.debug("[DailySelfie] 补画图片已存在于衣橱，跳过: %s", image_id)
@@ -1829,6 +1833,7 @@ class DailySelfieService:
                 if ref is not None:
                     ref_image_path = ref.get("image_path", "")
                     ref_strength = ref.get("ref_strength", "style")
+                    ref_user_tags = str(ref.get("user_tags", "") or "")
                     if not ref_image_path:
                         logger.warning(
                             "[DailySelfie] 人格 %s 提示词 %d ref_image_path 为空，改为纯文生图",
@@ -1836,9 +1841,11 @@ class DailySelfieService:
                         )
                         ref_image_path = ""
                         ref_strength = ""
+                        ref_user_tags = ""
                 else:
                     ref_image_path = ""
                     ref_strength = ""
+                    ref_user_tags = ""
 
                 selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
                 if selected_pid is None:
@@ -1856,7 +1863,7 @@ class DailySelfieService:
                 t = asyncio.create_task(
                     self._generate_one_selfie(
                         persona_name, prompt, ref_image_path, ref_strength, persona,
-                        provider_id=selected_pid,
+                        provider_id=selected_pid, ref_user_tags=ref_user_tags,
                     )
                 )
                 image_tasks.append(t)
@@ -1891,7 +1898,8 @@ class DailySelfieService:
                                 await self.counter.release(persona_name, _pid)
                             ref_path = ref_info.get("image_path", "") if ref_info else ""
                             ref_strength = ref_info.get("ref_strength", "style") if ref_info else ""
-                            failed_items.append((prompt_text, ref_path, ref_strength))
+                            ref_user_tags = str(ref_info.get("user_tags", "") or "") if ref_info else ""
+                            failed_items.append((prompt_text, ref_path, ref_strength, ref_user_tags))
 
             return (success, fail, provider_success, failed_items)
 
@@ -2392,7 +2400,7 @@ class DailySelfieService:
             success = 0
             fail = 0
             provider_success: dict[str, list[Path]] = {}
-            failed_items: list[tuple[str, str, str]] = []
+            failed_items: list[tuple[str, str, str, str]] = []
 
             image_tasks: list[asyncio.Task] = []
             task_prompts: list[tuple[str, dict | None, str, str]] = []
@@ -2403,9 +2411,11 @@ class DailySelfieService:
                     continue
 
                 ref_image_path = ref.get("image_path", "") if ref else ""
+                ref_user_tags = str(ref.get("user_tags", "") or "") if ref else ""
                 if not ref_image_path:
                     ref_image_path = ""
                     ref_strength = ""
+                    ref_user_tags = ""
 
                 selected_pid = await self._reserve_provider(persona, only_pid=only_pid)
                 if selected_pid is None:
@@ -2416,7 +2426,7 @@ class DailySelfieService:
                 t = asyncio.create_task(
                     self._generate_one_selfie(
                         persona_name, prompt, ref_image_path, ref_strength, persona,
-                        provider_id=selected_pid,
+                        provider_id=selected_pid, ref_user_tags=ref_user_tags,
                     )
                 )
                 image_tasks.append(t)
@@ -2445,7 +2455,8 @@ class DailySelfieService:
                             if _pid:
                                 await self.counter.release(persona_name, _pid)
                             ref_path = ref_info.get("image_path", "") if ref_info else ""
-                            failed_items.append((prompt_text, ref_path, ref_strength))
+                            ref_user_tags = str(ref_info.get("user_tags", "") or "") if ref_info else ""
+                            failed_items.append((prompt_text, ref_path, ref_strength, ref_user_tags))
 
             return (success, fail, provider_success, failed_items)
         except Exception as e:
