@@ -308,14 +308,14 @@ class GiteeAIImagePlugin(Star):
         if migrated:
             self.refs = ReferenceStore(self.data_dir)
 
-    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path, mode: str = "", prompt: str = "") -> None:
+    def _remember_last_image(self, event: AstrMessageEvent, image_path: Path, mode: str = "", prompt: str = "", user_tags: str = "") -> None:
         try:
             user_id = str(event.get_sender_id() or "")
         except Exception:
             user_id = ""
         if not user_id:
             return
-        self._last_image_by_user[user_id] = {"path": Path(image_path), "mode": mode, "prompt": prompt or ""}
+        self._last_image_by_user[user_id] = {"path": Path(image_path), "mode": mode, "prompt": prompt or "", "user_tags": user_tags or ""}
 
     @staticmethod
     def _as_int(value: Any, *, default: int) -> int:
@@ -1710,10 +1710,10 @@ class GiteeAIImagePlugin(Star):
 
         try:
             await mark_processing(event)
-            image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
+            image_path, result_mode, used_pid, ref_user_tags = await self._execute_llm_tool_generate_core(
                 event, prompt, m, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref, use_asset, asset_id
             )
-            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid)
+            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid, user_tags=ref_user_tags)
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
             await self._signal_llm_tool_failure(event)
@@ -1733,19 +1733,19 @@ class GiteeAIImagePlugin(Star):
         use_wardrobe_ref: bool = True,
         use_asset: bool = True,
         asset_id: str = "",
-    ) -> tuple[Path, str, str | None]:
+    ) -> tuple[Path, str, str | None, str]:
         if m in {"selfie_ref", "selfie", "ref"}:
             logger.debug("[aiimg] route=selfie_ref (explicit)")
             if not self._is_selfie_enabled():
                 raise RuntimeError("自拍功能未启用")
             if not self._is_selfie_llm_enabled():
                 raise RuntimeError("自拍功能未启用")
-            image_path, used_pid = await self._generate_selfie_image(
+            image_path, used_pid, ref_user_tags = await self._generate_selfie_image(
                 event, prompt, target_backend, size=size, resolution=resolution,
                 use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
                 use_asset=use_asset, asset_id=asset_id,
             )
-            return image_path, "selfie", used_pid
+            return image_path, "selfie", used_pid, ref_user_tags
 
         if m == "auto" and await self._should_auto_selfie_ref(event, prompt):
             if not self._is_selfie_enabled():
@@ -1755,12 +1755,12 @@ class GiteeAIImagePlugin(Star):
             else:
                 try:
                     logger.debug("[aiimg] route=auto->selfie_ref")
-                    image_path, used_pid = await self._generate_selfie_image(
+                    image_path, used_pid, ref_user_tags = await self._generate_selfie_image(
                         event, prompt, target_backend, size=size, resolution=resolution,
                         use_wardrobe=use_wardrobe, use_wardrobe_ref=use_wardrobe_ref,
                         use_asset=use_asset, asset_id=asset_id,
                     )
-                    return image_path, "selfie", used_pid
+                    return image_path, "selfie", used_pid, ref_user_tags
                 except Exception as e:
                     logger.warning("[aiimg_generate] auto-selfie failed, fallback to draw/edit: %s", e)
 
@@ -1794,7 +1794,7 @@ class GiteeAIImagePlugin(Star):
                 prompt=prompt, images=bytes_images, backend=target_backend,
                 size=size, resolution=resolution,
             )
-            return image_path, "edit", None
+            return image_path, "edit", None, ""
 
         draw_conf = self._get_feature("draw")
         if not bool(draw_conf.get("enabled", True)):
@@ -1808,7 +1808,7 @@ class GiteeAIImagePlugin(Star):
         image_path = await self.draw.generate(
             prompt, provider_id=target_backend, size=size, resolution=resolution,
         )
-        return image_path, "draw", None
+        return image_path, "draw", None, ""
 
     async def _async_llm_tool_generate(
         self,
@@ -1825,11 +1825,11 @@ class GiteeAIImagePlugin(Star):
         asset_id: str = "",
     ) -> None:
         try:
-            image_path, result_mode, used_pid = await self._execute_llm_tool_generate_core(
+            image_path, result_mode, used_pid, ref_user_tags = await self._execute_llm_tool_generate_core(
                 event, prompt, mode, target_backend, size, resolution,
                 use_wardrobe, use_wardrobe_ref, use_asset, asset_id
             )
-            self._remember_last_image(event, image_path, mode=result_mode, prompt=prompt)
+            self._remember_last_image(event, image_path, mode=result_mode, prompt=prompt, user_tags=ref_user_tags)
             if result_mode == "selfie":
                 await self._track_selfie_quota(event, used_pid=used_pid)
             sent = await self._send_image_with_fallback(event, image_path)
@@ -3029,8 +3029,9 @@ class GiteeAIImagePlugin(Star):
             prompt: str = "",
             mode: str = "",
             used_pid: str | None = None,
+            user_tags: str = "",
     ) -> mcp.types.CallToolResult | None:
-        self._remember_last_image(event, image_path, mode=mode, prompt=prompt)
+        self._remember_last_image(event, image_path, mode=mode, prompt=prompt, user_tags=user_tags)
 
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
@@ -3466,7 +3467,7 @@ class GiteeAIImagePlugin(Star):
             use_wardrobe_ref: bool = True,
             use_asset: bool = False,
             asset_id: str = "",
-    ) -> tuple[Path, str | None]:
+    ) -> tuple[Path, str | None, str]:
         persona_name = await self._get_current_persona_name(event)
         if not persona_name:
             raise RuntimeError("当前对话未绑定人格，无法使用自拍功能。")
@@ -3477,6 +3478,7 @@ class GiteeAIImagePlugin(Star):
 
         selfie_conf = self._get_feature("selfie")
         wardrobe_ref_added = False
+        wardrobe_ref_user_tags = ""
         if use_wardrobe and use_wardrobe_ref and selfie_conf.get("wardrobe_ref_enabled", False):
             wardrobe = self._get_wardrobe_instance()
             if wardrobe:
@@ -3508,6 +3510,7 @@ class GiteeAIImagePlugin(Star):
                 if ref:
                     ref_paths.append(Path(ref["image_path"]))
                     wardrobe_ref_added = True
+                    wardrobe_ref_user_tags = str(ref.get("user_tags", "") or "")
                     logger.debug(
                         "[selfie] 已追加衣橱参考图: persona=%s image_id=%s",
                         ref.get("persona", "未知"),
@@ -3617,7 +3620,7 @@ class GiteeAIImagePlugin(Star):
             chain_override=chain_override,
         )
         used_pid = self.edit.last_success_provider
-        return image_path, used_pid
+        return image_path, used_pid, wardrobe_ref_user_tags
 
     async def _do_selfie(
             self,
@@ -3654,8 +3657,8 @@ class GiteeAIImagePlugin(Star):
 
         try:
             await mark_processing(event)
-            image_path, used_pid = await self._generate_selfie_image(event, prompt, backend, size=size)
-            self._remember_last_image(event, image_path, mode="selfie", prompt=prompt)
+            image_path, used_pid, ref_user_tags = await self._generate_selfie_image(event, prompt, backend, size=size)
+            self._remember_last_image(event, image_path, mode="selfie", prompt=prompt, user_tags=ref_user_tags)
             await self._trigger_wardrobe_auto_save(event)
             sent = await self._send_image_with_fallback(event, image_path)
             if not sent:
