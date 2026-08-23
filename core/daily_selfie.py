@@ -1820,7 +1820,7 @@ class DailySelfieService:
             success = 0
             fail = 0
             provider_success: dict[str, list[Path]] = {}
-            failed_items: list[tuple[str, str, str]] = []
+            failed_items: list[tuple[str, str, str, str]] = []
 
             image_tasks: list[asyncio.Task] = []
             task_prompts: list[tuple[str, dict | None, str]] = []
