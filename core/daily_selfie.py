@@ -489,6 +489,68 @@ class DailySelfieService:
         self._today_used_image_ids: set[str] = set()
         self._today_used_date: str = ""
 
+        # token_router 插件实例缓存（跨插件上报补拍 LLM 阶段的 token 用量）
+        self._token_router: Optional[Any] = None
+        self._token_router_checked = False
+
+    def _find_token_router(self):
+        """跨插件查找 token_router 实例（需具备 record_storage_usage 方法）。
+
+        首次查找后缓存结果；找不到或 token_router 未加载时返回 None。
+        """
+        if self._token_router_checked:
+            return self._token_router
+        self._token_router_checked = True
+        try:
+            stars = self.plugin.context.get_all_stars()
+        except Exception:
+            return None
+        for meta in stars or []:
+            p_id = str(getattr(meta, "id", "") or "")
+            p_name = str(getattr(meta, "name", "") or "")
+            root_dir_name = str(getattr(meta, "root_dir_name", "") or "")
+            if (
+                "token_router" not in p_id
+                and "token_router" not in p_name
+                and "token_router" not in root_dir_name
+            ):
+                continue
+            for attr in ("star_instance", "instance", "star_cls"):
+                candidate = getattr(meta, attr, None)
+                if candidate is not None and hasattr(candidate, "record_storage_usage"):
+                    self._token_router = candidate
+                    return candidate
+        return None
+
+    def _report_llm_tokens(self, provider_id: str, resp) -> None:
+        """将一次补拍 LLM 阶段调用的 token 用量上报给 token_router。
+
+        上传走 record_plugin_usage：与聊天共享同一每日额度桶，合计到限时聊天照常顺延；
+        补拍自身不参与路由，仍使用配置的 provider。
+        """
+        if not provider_id:
+            return
+        try:
+            total_tokens = int(getattr(getattr(resp, "usage", None), "total", 0) or 0)
+        except (ValueError, TypeError):
+            return
+        if total_tokens <= 0:
+            return
+        router = self._find_token_router()
+        if router is None:
+            return
+        record = getattr(router, "record_plugin_usage", None)
+        if record is None:
+            record = getattr(router, "record_storage_usage", None)
+        if record is None:
+            return
+        try:
+            record(provider_id, total_tokens)
+        except Exception as e:
+            logger.warning(
+                "[DailySelfie] 上报补拍token用量失败 provider=%s: %s", provider_id, e
+            )
+
     def _record_debug(self, level: str, message: str) -> None:
         """记录一条补拍调试事件到内存缓冲区。
 
@@ -1502,6 +1564,7 @@ class DailySelfieService:
                     ),
                     timeout=600,
                 )
+                self._report_llm_tokens(provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if text:
                     logger.debug(
@@ -1934,6 +1997,7 @@ class DailySelfieService:
                     ),
                     timeout=360,
                 )
+                self._report_llm_tokens(chat_provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning("[DailySelfie] r1场景返回空文本(重试%d/2)", attempt + 1)
@@ -2008,6 +2072,7 @@ class DailySelfieService:
                     ),
                     timeout=600,
                 )
+                self._report_llm_tokens(costume_provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
@@ -2093,6 +2158,7 @@ class DailySelfieService:
                     ),
                     timeout=600,
                 )
+                self._report_llm_tokens(chat_provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
@@ -2244,6 +2310,7 @@ class DailySelfieService:
                     ),
                     timeout=600,
                 )
+                self._report_llm_tokens(chat_provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
@@ -2316,6 +2383,7 @@ class DailySelfieService:
                     ),
                     timeout=600,
                 )
+                self._report_llm_tokens(chat_provider_id, resp)
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if not text:
                     logger.warning(
