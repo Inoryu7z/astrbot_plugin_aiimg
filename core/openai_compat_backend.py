@@ -590,17 +590,19 @@ class OpenAICompatBackend:
         model: str,
         size: str,
     ) -> Path:
-        """magic666 图生图：POST /v1/images/edits（JSON，image 字段为 base64 数组）。"""
-        image_b64_list: list[str] = []
+        """magic666 图生图：POST /v1/images/edits（JSON，images 字段为 image_url 对象数组）。"""
+        image_refs: list[dict[str, str]] = []
         for img in images:
-            image_b64_list.append(base64.b64encode(img).decode("utf-8"))
+            mime, _ext = guess_image_mime_and_ext(img)
+            b64 = base64.b64encode(img).decode("utf-8")
+            image_refs.append({"image_url": f"data:{mime};base64,{b64}"})
 
         payload = {
             "model": model,
             "prompt": prompt,
             "n": 1,
             "size": size,
-            "image": image_b64_list,
+            "images": image_refs,
         }
         return await self._magic666_request(payload, use_edit_endpoint=True)
 
