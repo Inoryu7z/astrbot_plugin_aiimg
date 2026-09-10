@@ -1832,7 +1832,7 @@
       "truegrok": {
         "name": "级联后端（True Grok）",
         "description": "级联模板：多个同类型后端按顺序尝试，失败自动切换。",
-        "hint": "fallback_chain 填同类型后端 ID（图片或视频皆可，最多 3 个，不支持混用）。",
+        "hint": "fallback_chain 填同类型后端 ID（图片或视频皆可，最多 8 个，不支持混用）。",
         "items": {
           "id": {
             "type": "string",
@@ -1855,7 +1855,7 @@
           },
           "fallback_chain": {
             "type": "list",
-            "description": "级联后端 ID 列表（最多3个，按顺序尝试，必须同为图片或同为视频）",
+            "description": "级联后端 ID 列表（最多8个，按顺序尝试，必须同为图片或同为视频）",
             "hint": "图片级联如 [\"openai_a\", \"openai_b\"]；视频级联如 [\"seedance_a\", \"seedance_b\"]",
             "default": []
           }

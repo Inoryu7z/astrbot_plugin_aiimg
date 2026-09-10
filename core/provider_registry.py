@@ -243,9 +243,9 @@ class ProviderRegistry:
                         f"provider '{provider_id}' 级联后端 fallback_chain 不能为空"
                     )
                     continue
-                if len(chain_ids) > 3:
+                if len(chain_ids) > 8:
                     errors.append(
-                        f"provider '{provider_id}' 级联后端 fallback_chain 最多 3 个"
+                        f"provider '{provider_id}' 级联后端 fallback_chain 最多 8 个"
                     )
                 kinds: set[str] = set()
                 for cid in chain_ids:

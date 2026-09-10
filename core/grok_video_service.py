@@ -1108,7 +1108,7 @@ class TrueGrokVideoService:
         self.label = str(provider.get("label") or self.provider_id).strip()
         raw_chain = provider.get("fallback_chain")
         if isinstance(raw_chain, list):
-            self.fallback_chain = [str(pid or "").strip() for pid in raw_chain[:3] if pid]
+            self.fallback_chain = [str(pid or "").strip() for pid in raw_chain[:8] if pid]
         else:
             self.fallback_chain = []
 
