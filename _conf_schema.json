@@ -1157,6 +1157,80 @@
           }
         }
       },
+      "vercel_seedream": {
+        "name": "Vercel Seedream",
+        "description": "Vercel AI Gateway 上的豆包 Seedream（bytedance/seedream-4.5 等）。",
+        "hint": "改图固定走 images 对象数组契约，参考图 base64 内联；去水印参数自动注入。size 最小 3,686,400 像素，竖版用 1440x2560。",
+        "items": {
+          "id": {
+            "type": "string",
+            "description": "服务商 ID（唯一）",
+            "default": "vercel_seedream"
+          },
+          "label": {
+            "type": "string",
+            "description": "显示名称（可选）",
+            "default": ""
+          },
+          "full_generate_url": {
+            "type": "string",
+            "description": "完整文生图 URL",
+            "hint": "例如 https://ai-gateway.vercel.sh/v1/images/generations；本模板改图固定走 full_edit_url。",
+            "default": ""
+          },
+          "full_edit_url": {
+            "type": "string",
+            "description": "完整改图 URL",
+            "hint": "例如 https://ai-gateway.vercel.sh/v1/images/edits（已验证链路）。",
+            "default": ""
+          },
+          "api_keys": {
+            "type": "list",
+            "description": "API Key 池",
+            "default": [],
+            "obvious_hint": true
+          },
+          "model": {
+            "type": "string",
+            "description": "模型名称",
+            "hint": "例如 bytedance/seedream-4.5。",
+            "default": ""
+          },
+          "supports_edit": {
+            "type": "bool",
+            "description": "支持改图 (images.edit)",
+            "default": true
+          },
+          "timeout": {
+            "type": "int",
+            "description": "超时(秒)",
+            "default": 120
+          },
+          "max_retries": {
+            "type": "int",
+            "description": "最大重试次数",
+            "default": 2
+          },
+          "default_size": {
+            "type": "string",
+            "description": "默认输出尺寸",
+            "hint": "最小像素 3,686,400；9:16 竖版用 1440x2560，或 2K / 4K 档。",
+            "default": "1440x2560"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "额外请求体（高级；watermark/providerOptions 已自动注入，一般无需填写）",
+            "items": {},
+            "default": {}
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "User-Agent 请求头",
+            "hint": "留空使用默认。部分中转站会拦截默认 UA，可填入浏览器 UA 绕过。",
+            "default": ""
+          }
+        }
+      },
       "openai_chat": {
         "name": "OpenAI Chat图",
         "description": "用于 Chat 回复图片（markdown/data:image/URL）的网关。",

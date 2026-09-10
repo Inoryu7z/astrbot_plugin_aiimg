@@ -4,6 +4,12 @@
 
 * 图片与视频级联后端的 fallback_chain 最多支持 8 个同类型后端，按顺序尝试，失败自动顺延。
 
+**🖼️ 新增 Vercel Seedream 服务商模板**
+
+* 新增 `vercel_seedream` 模板，直连 Vercel AI Gateway 上的豆包 Seedream 模型（如 `bytedance/seedream-4.5`）。
+* 改图自动按网关契约组装参考图（`images` 对象数组），参考图 base64 内联，无需上传图片文件。
+* 去水印参数（中文 + 英文双水印）由后端自动注入，无需手动配置。
+
 ---
 
 ### v2.0.8

@@ -97,7 +97,7 @@
 
 在配置面板底部添加服务商实例，每个实例需要唯一的 `id`。
 
-**图片类**：OpenAI Images、OpenAI ImagesURL、Ark Seedream（Seedream 5.0 pro 专用，修复该模型改图 HTTP 400）、OpenAI Chat 图、Gemini Images、Gitee Images、Gitee 异步改图、即梦（豆包）
+**图片类**：OpenAI Images、OpenAI ImagesURL、Ark Seedream（Seedream 5.0 pro 专用，修复该模型改图 HTTP 400）、Vercel Seedream（Vercel AI Gateway 上的豆包 Seedream，改图固定按网关契约传参考图、去水印参数自动注入）、OpenAI Chat 图、Gemini Images、Gitee Images、Gitee 异步改图、即梦（豆包）
 
 **视频类**：Grok Video（multipart 中转站）、官方 Grok（视频）、豆包 Seedance
 

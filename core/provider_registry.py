@@ -23,6 +23,7 @@ from .jimeng_api_backend import JimengApiBackend
 from .openai_chat_image_backend import OpenAIChatImageBackend
 from .openai_compat_backend import OpenAICompatBackend
 from .openai_full_url_backend import OpenAIFullURLBackend
+from .vercel_seedream_backend import VercelSeedreamBackend
 from .vertex_ai_anonymous_backend import (
     VertexAIAnonymousBackend,
     VertexAIAnonymousSettings,
@@ -55,6 +56,8 @@ _TEMPLATE_KEY_ALIASES: dict[str, str] = {
     "openai_compat": "openai_images",
     "openai_full_url": "openai_full_url_images",
     "ark_seedream": "ark_seedream",
+    "vercel_seedream": "vercel_seedream",
+    "vercel": "vercel_seedream",
 }
 
 
@@ -112,6 +115,8 @@ class ProviderRegistry:
             return "openai_full_url_images"
         if pid in {"ark_seedream", "seedream"}:
             return "ark_seedream"
+        if pid in {"vercel_seedream", "vercel"}:
+            return "vercel_seedream"
         if pid in {"modelscope", "modelscope_openai_images"}:
             return "modelscope_openai_images"
         if pid in {"gemini_openai_chat"}:
@@ -330,7 +335,7 @@ class ProviderRegistry:
             if template_key in {"vertex_ai_anonymous"}:
                 if not str(item.get("model") or "").strip():
                     errors.append(f"provider '{provider_id}' missing model")
-            if template_key in {"openai_full_url_images", "ark_seedream"}:
+            if template_key in {"openai_full_url_images", "ark_seedream", "vercel_seedream"}:
                 full_generate_url = str(item.get("full_generate_url") or "").strip()
                 if not full_generate_url:
                     errors.append(
@@ -537,6 +542,29 @@ class ProviderRegistry:
                 max_retries=int(conf.get("max_retries") or 2),
                 default_model=str(conf.get("model") or "").strip(),
                 default_size=str(conf.get("default_size") or "4096x4096").strip(),
+                supports_edit=bool(conf.get("supports_edit", True)),
+                extra_body=_as_dict(conf.get("extra_body")) or None,
+                user_agent=str(conf.get("user_agent") or "").strip() or None,
+            )
+
+        if template_key == "vercel_seedream":
+            # Vercel AI Gateway 上的豆包 Seedream 专用后端：
+            # 改图固定按网关契约传 images:[{image_url:...}]，双参数去水印由后端自动注入
+            return VercelSeedreamBackend(
+                imgr=self._imgr,
+                full_generate_url=str(conf.get("full_generate_url") or "").strip(),
+                full_edit_url=str(conf.get("full_edit_url") or "").strip(),
+                api_keys=[
+                    str(x).strip()
+                    for x in _as_list(conf.get("api_keys"))
+                    if str(x).strip()
+                ],
+                timeout=int(conf.get("timeout") or 120),
+                max_retries=int(conf.get("max_retries") or 2),
+                default_model=str(conf.get("model") or "").strip(),
+                default_size=str(
+                    conf.get("default_size") or "1440x2560"
+                ).strip(),
                 supports_edit=bool(conf.get("supports_edit", True)),
                 extra_body=_as_dict(conf.get("extra_body")) or None,
                 user_agent=str(conf.get("user_agent") or "").strip() or None,
