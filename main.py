@@ -2927,6 +2927,42 @@ class GiteeAIImagePlugin(Star):
             logger.debug("[aiimg] 获取衣橱插件实例失败: %s", e)
         return None
 
+    def _get_token_router_instance(self):
+        """获取 token_router 插件实例，用于生图回传时切换到能看图的模型。"""
+        try:
+            star = self.context.get_registered_star("astrbot_plugin_token_router")
+            if star and star.activated and star.star_cls:
+                return star.star_cls
+        except Exception as e:
+            logger.debug("[aiimg] 获取 token_router 插件实例失败: %s", e)
+        return None
+
+    async def _ensure_vision_model_before_image_return(
+        self, event: AstrMessageEvent
+    ) -> None:
+        """回传图片给 LLM 前，把当前会话切换到能看图的模型。
+
+        框架只在「当前模型支持图片输入」时，才把工具返回的图片放进上下文让
+        LLM 看到（tool_loop_agent_runner.py:1052-1088）。而图片是会话中途
+        生成的，模型早在此轮开始时就被 token_router 选定，若选中的是非多模态
+        模型，图片会被直接丢弃——LLM 看不到图却仍被要求"根据图片回应"。
+
+        这里在返回图片前请 token_router 切换一次模型。token_router 未安装、
+        版本不含该接口或切换失败时一律静默跳过，不影响生图结果。
+        """
+        router = self._get_token_router_instance()
+        if router is None:
+            return
+        ensure = getattr(router, "ensure_vision_provider", None)
+        if ensure is None:
+            return
+        try:
+            result = ensure(event.unified_msg_origin, event)
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as e:
+            logger.debug("[aiimg] 切换多模态模型失败: %s", e)
+
     async def _trigger_wardrobe_auto_save(self, event: AstrMessageEvent) -> None:
         # 命令路径使用 event.send() 发送图片，不会触发 Pipeline 的 RespondStage，
         # 因此 wardrobe 的 on_after_message_sent 钩子不会被调用。
@@ -3058,6 +3094,8 @@ class GiteeAIImagePlugin(Star):
         await self._ensure_tool_image_cache_dir()
         result = await self._build_llm_tool_image_result(image_path)
         if result is not None:
+            # 图片即将回传给 LLM 看图：先切到能看图的模型，否则图片会被丢弃
+            await self._ensure_vision_model_before_image_return(event)
             return result
         logger.warning("[aiimg] LLM 上下文图片构建失败，降级文字描述")
         return self._build_llm_tool_text_desc_result(prompt)
