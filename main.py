@@ -1643,6 +1643,8 @@ class GiteeAIImagePlugin(Star):
         生成的图片会自动发送给用户，你绝对禁止手动调用 send_message_to_user 发送图片。
         调用此工具前，你必须先阅读对应的自拍 skill（如 selfie-reference-router 或 sakuragawa-momoha-selfie-router），了解完整的自拍流程和规范后再调用。
 
+        【适用范围】本工具生成新图片（自拍 / 文生图 / 改图），不接触图库里已有的照片；用户要的是“已有的某张图”时用 search_wardrobe_image，要视频用 aiimg_video。
+
         使用建议：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
         - 最高频：用户要求"bot 自拍/来一张你自己的自拍"，且已设置自拍参考照：用 mode=selfie_ref（或 mode=auto）
@@ -1846,7 +1848,7 @@ class GiteeAIImagePlugin(Star):
 
     @filter.llm_tool(name="aiimg_video")
     async def aiimg_video(self, event: AstrMessageEvent, prompt: str, image_url: str = "", backend: str = "auto"):
-        """根据用户发送/引用的图片生成视频。
+        """根据用户发送/引用的图片生成视频。本工具生成视频，不接触图库里已有的照片。
 
         Args:
             prompt(string): 视频提示词。支持 "预设名 额外提示词"（与 `/视频 预设名 额外提示词` 一致）
