@@ -1643,7 +1643,8 @@ class GiteeAIImagePlugin(Star):
         生成的图片会自动发送给用户，你绝对禁止手动调用 send_message_to_user 发送图片。
         调用此工具前，你必须先阅读对应的自拍 skill（如 selfie-reference-router 或 sakuragawa-momoha-selfie-router），了解完整的自拍流程和规范后再调用。
 
-        【适用范围】本工具生成新图片（自拍 / 文生图 / 改图），不接触图库里已有的照片；用户要的是“已有的某张图”时用 search_wardrobe_image，要视频用 aiimg_video。
+        【适用范围】本工具生成新图片（自拍 / 文生图 / 改图），不接触图库里已有的照片。
+        按动词判断走哪个工具：用户说“拍一张/画一张/生成一张”，要的是新产出的图，用本工具；说“发一张/找一张/之前那张再看看”，要的是图库里已有的那张，用 search_wardrobe_image。要视频用 aiimg_video。
 
         使用建议：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
