@@ -3384,9 +3384,12 @@ class GiteeAIImagePlugin(Star):
     def _is_ark_seedream_provider(self, provider_id: str) -> bool:
         """判断 provider_id 是否为 ark_seedream 后端（按 template_key 查注册表）。
 
-        ark_seedream 后端只能接受 1 张参考图，需走单图模式：
-        只传人设参考图 #1，不传衣橱图，不用后两张人设图，
-        并对 LLM 输出做后置字符串替换（"前N张参考图" → "参考图"）。
+        ark_seedream 的唯一特殊之处：人设参考图只保留第一张，
+        衣橱图/部位素材/用户附图照常追加，并对 LLM 输出做后置字符串替换
+        （"前N张参考图" → "参考图"）。
+
+        注意：后端本身并不限制参考图张数（ArkSeedreamBackend 只改写了
+        _collect_local_options），裁到 1 张是刻意的人设图取舍，不是能力限制。
         """
         pid = str(provider_id or "").strip()
         if not pid:
@@ -3418,6 +3421,46 @@ class GiteeAIImagePlugin(Star):
             logger.debug("[aiimg] _get_provider_template_key(%s) 检查异常: %s", pid, e)
             return ""
 
+    @staticmethod
+    def _collect_selfie_pids(
+        backend: str | None, chain_override: list | None
+    ) -> list[str]:
+        """抽取自拍/补拍请求涉及的 provider_id 列表。
+
+        显式 backend 优先（此时链路兜底被禁用），否则取 chain_override。
+        """
+        if backend:
+            pid = str(backend).strip()
+            return [pid] if pid else []
+        pids: list[str] = []
+        for item in chain_override or []:
+            if isinstance(item, dict):
+                pid = str(item.get("provider_id") or item.get("provider") or "").strip()
+            elif isinstance(item, str):
+                pid = item.strip()
+            else:
+                pid = ""
+            if pid:
+                pids.append(pid)
+        return pids
+
+    def _is_ark_selfie_request(
+        self, backend: str | None, chain_override: list | None
+    ) -> bool:
+        """自拍/补拍请求是否「整体」落在 ark_seedream 后端。
+
+        ark_seedream 的设计约束是「人设参考图只保留第一张」，因此：
+        - 显式指定 backend → 只看该 provider
+        - 走人格链路 → 链路上全部是 ark_seedream 才算
+        - 混合链路 → False（无法预知最终命中哪个 provider，按非 ark 处理）
+
+        与 :meth:`_resolve_selfie_ref_resolution` 的「混合不覆盖」口径保持一致。
+        """
+        pids = self._collect_selfie_pids(backend, chain_override)
+        return bool(pids) and all(
+            self._is_ark_seedream_provider(pid) for pid in pids
+        )
+
     def _resolve_selfie_ref_resolution(
         self, backend: str | None, chain_override: list | None,
     ) -> str | None:
@@ -3427,17 +3470,7 @@ class GiteeAIImagePlugin(Star):
         - 全部 ark_seedream → "1K"
         - 混合或含其他后端 → None（不覆盖，用各自默认尺寸）
         """
-        pids: list[str] = []
-        if backend:
-            pids = [str(backend).strip()]
-        elif chain_override:
-            for item in chain_override:
-                if isinstance(item, dict):
-                    pid = str(item.get("provider_id") or item.get("provider") or "").strip()
-                    if pid:
-                        pids.append(pid)
-                elif isinstance(item, str) and item.strip():
-                    pids.append(item.strip())
+        pids = self._collect_selfie_pids(backend, chain_override)
 
         if not pids:
             return None
@@ -3475,6 +3508,18 @@ class GiteeAIImagePlugin(Star):
         ref_paths, source = await self._get_selfie_reference_paths(
             event, persona_name=persona_name
         )
+
+        # ark_seedream：人设参考图只保留第一张
+        # 只裁人设图，衣橱图/部位素材/用户附图照常追加（见下方 append 逻辑）
+        if len(ref_paths) > 1 and self._is_ark_selfie_request(
+            backend, self._get_persona_selfie_chain(persona_name)
+        ):
+            logger.debug(
+                "[selfie] 人格 %s ark_seedream 仅保留人设参考图 #1（原 %d 张）",
+                persona_name,
+                len(ref_paths),
+            )
+            ref_paths = ref_paths[:1]
 
         selfie_conf = self._get_feature("selfie")
         wardrobe_ref_added = False
@@ -3687,13 +3732,17 @@ class GiteeAIImagePlugin(Star):
             logger.warning("[daily_selfie] 人格 %s 无参考照", persona_name)
             return None
 
-        # ark_seedream 单图模式：只传人设参考图 #1，不传衣橱图，不用后两张人设图
+        # ark_seedream：人设参考图只保留第一张，衣橱参考图照常追加
         is_ark = self._is_ark_seedream_provider(provider_id)
         wardrobe_ref_appended = False
-        if is_ark:
-            ref_paths = [ref_paths[0]]
-            logger.debug("[daily_selfie] 人格 %s ark_seedream 单图模式，仅传人设参考图 #1", persona_name)
-        elif ref_image_path:
+        if is_ark and len(ref_paths) > 1:
+            logger.debug(
+                "[daily_selfie] 人格 %s ark_seedream 仅保留人设参考图 #1（原 %d 张）",
+                persona_name,
+                len(ref_paths),
+            )
+            ref_paths = ref_paths[:1]
+        if ref_image_path:
             p = Path(ref_image_path)
             if p.exists():
                 ref_paths.append(p)
@@ -3726,7 +3775,7 @@ class GiteeAIImagePlugin(Star):
             if persona_conf:
                 persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
-        # ark 单图模式后置替换：把"前N张参考图"/"前N张人设参考图"统一改为"参考图"
+        # ark 人设图只剩 1 张，后置替换：把"前N张参考图"/"前N张人设参考图"统一改为"参考图"
         # 例："以前三张参考图的少女" → "以参考图的少女"
         if is_ark:
             final_prompt = re.sub(r"前[三3两2一1\d]+张(?:人设)?参考图", "参考图", prompt)

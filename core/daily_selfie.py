@@ -1125,52 +1125,33 @@ class DailySelfieService:
         if any(s == "cosplay" for s in styles):
             per_query_sim = [0.0 if s == "cosplay" else daily_ref_min_sim for s in styles]
 
-        # ark_seedream 单图模式判定：
-        #   - only_pid 指定且为 ark_seedream → 单图模式
-        #   - only_pid 为空且该人格所有 providers 都是 ark_seedream → 单图模式
-        #   - 混合 provider 人格（ark + 非 ark）→ 不跳过搜图，ark 调用在 _generate_daily_selfie_image 里兜底
-        ark_mode = False
-        if only_pid:
-            ark_mode = self.plugin._is_ark_seedream_provider(only_pid)
-        else:
-            _providers = persona.get("providers", []) or []
-            if _providers and all(
-                self.plugin._is_ark_seedream_provider(str(pv.get("provider_id", "") or "").strip())
-                for pv in _providers
-            ):
-                ark_mode = True
-
-        if ark_mode:
-            ref_results = [None] * pair_count
-            logger.debug("[DailySelfie] 人格 %s ark_seedream 单图模式，跳过衣橱搜图", persona_name)
-            self._record_debug("INFO", f"ark_seedream 单图模式，跳过衣橱搜图（persona={persona_name}）")
-        else:
-            ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim)
+        # 搜图对所有后端一视同仁（ark_seedream 也不例外）：
+        # ark 的唯一区别是生图时人设图只保留第一张，衣橱图照常注入
+        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim)
 
         # 任何风格无参考图 → 排除当前风格和近期风格，换一个风格重搜1次
         # 解决单图风格（如护士服）今日已用时搜不到图的问题
-        if not ark_mode:
-            recent_set = set(recent_styles)
-            for i in range(pair_count):
-                if ref_results[i] is None:
-                    alt_pool = [s for s in style_pool if s != styles[i] and s not in recent_set]
-                    if not alt_pool:
-                        alt_pool = [s for s in style_pool if s != styles[i]]
-                    if alt_pool:
-                        new_style = random.choice(alt_pool)
-                        new_query = f"{new_style} {scenes[i]}"
-                        # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
-                        retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
-                        logger.debug(
-                            "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
-                            persona_name, styles[i], new_style,
-                        )
-                        retry_ref = await self._search_reference_images(
-                            [new_query], wardrobe, persona_name, min_similarity=retry_sim,
-                        )
-                        styles[i] = new_style
-                        if retry_ref and retry_ref[0] is not None:
-                            ref_results[i] = retry_ref[0]
+        recent_set = set(recent_styles)
+        for i in range(pair_count):
+            if ref_results[i] is None:
+                alt_pool = [s for s in style_pool if s != styles[i] and s not in recent_set]
+                if not alt_pool:
+                    alt_pool = [s for s in style_pool if s != styles[i]]
+                if alt_pool:
+                    new_style = random.choice(alt_pool)
+                    new_query = f"{new_style} {scenes[i]}"
+                    # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
+                    retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
+                    logger.debug(
+                        "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
+                        persona_name, styles[i], new_style,
+                    )
+                    retry_ref = await self._search_reference_images(
+                        [new_query], wardrobe, persona_name, min_similarity=retry_sim,
+                    )
+                    styles[i] = new_style
+                    if retry_ref and retry_ref[0] is not None:
+                        ref_results[i] = retry_ref[0]
 
         ref_by_pair: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
