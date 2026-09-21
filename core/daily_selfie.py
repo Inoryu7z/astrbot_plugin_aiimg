@@ -1625,6 +1625,33 @@ class DailySelfieService:
             img = img.resize((int(w * ratio), int(h * ratio)), PILImage.LANCZOS)
         img.save(dst, format="JPEG", quality=quality)
 
+    def _get_cosplay_weight(self) -> float:
+        """cosplay 在 r0 加权抽样中的权重（其余风格恒为 1）。
+
+        读取 features.selfie.daily_selfie_cosplay_weight，默认 3.0。
+        留空用默认；非数字、非正数、NaN/Inf 一律回退默认，避免 random.choices 报错。
+        """
+        default = 3.0
+        try:
+            raw = self.plugin._get_feature("selfie").get(
+                "daily_selfie_cosplay_weight", default
+            )
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                return default
+            weight = float(raw)
+        except Exception as e:
+            logger.warning("[DailySelfie] cosplay 权重读取失败，回退 %s: %s", default, e)
+            return default
+        # NaN 会让区间判断整体为 False，一并被拦下
+        if not (0 < weight < 1000):
+            logger.warning(
+                "[DailySelfie] cosplay 权重 %s 非法（须为大于 0 的有限数），回退 %s",
+                weight,
+                default,
+            )
+            return default
+        return weight
+
     async def _select_styles_by_algorithm(
         self,
         count: int,
@@ -1635,7 +1662,8 @@ class DailySelfieService:
 
         策略：
         1. 从风格池中过滤掉近期已拍过的风格，得"新鲜池"（cosplay 始终保留在新鲜池中）
-        2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个（cosplay 权重=3，其余=1）
+        2. 若新鲜池非空，从新鲜池中加权有放回抽 count 个
+           （cosplay 权重取 features.selfie.daily_selfie_cosplay_weight，默认 3；其余=1）
         3. 若新鲜池为空，从全部风格池中加权有放回抽 count 个
         - 有放回允许同一风格被多次选中（如一次补拍拍多张 cosplay）
         """
@@ -1646,7 +1674,7 @@ class DailySelfieService:
         fresh_pool = [s for s in style_pool if s not in recent_set or s == "cosplay"]
 
         pool = fresh_pool if fresh_pool else style_pool
-        picked = self._weighted_choices(pool, count)
+        picked = self._weighted_choices(pool, count, self._get_cosplay_weight())
 
         picked = picked[:count]
         logger.debug(
@@ -1656,11 +1684,13 @@ class DailySelfieService:
         return picked
 
     @staticmethod
-    def _weighted_choices(pool: list[str], k: int) -> list[str]:
-        """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=3，其余=1。"""
+    def _weighted_choices(
+        pool: list[str], k: int, cosplay_weight: float = 3.0
+    ) -> list[str]:
+        """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=cosplay_weight，其余=1。"""
         if not pool or k <= 0:
             return []
-        weights = [3 if s == "cosplay" else 1 for s in pool]
+        weights = [cosplay_weight if s == "cosplay" else 1 for s in pool]
         try:
             return random.choices(pool, weights=weights, k=k)
         except Exception as e:
