@@ -1473,7 +1473,11 @@ class DailySelfieService:
         logger.debug("[DailySelfie] 人格 %s 搜图完成，找到 %d 张参考图（共 %d 组配对）", persona_name, ref_found_count, pair_count)
         self._record_debug("INFO", f"搜图完成，找到 {ref_found_count} 张参考图（共 {pair_count} 组配对）")
 
-        persona_ref_count = len(self.plugin._get_persona_config_selfie_reference_paths(persona_name))
+        # 按「实际会发出的人设图张数」取数：ark_seedream 只发第一张人设图，
+        # 用 WebUI 配置张数会让提示词里的参考图序号整体错位
+        persona_ref_count = self.plugin._effective_persona_ref_count_for_daily_selfie(
+            persona_name, persona.get("providers"), only_pid
+        )
         search_ref_index = persona_ref_count + 1
 
         ref_descriptions: list[str] = []

@@ -1992,7 +1992,10 @@ class GiteeAIImagePlugin(Star):
         ref_persona = ref.get("persona", "") or "未知"
         ref_strength = ref.get("ref_strength", "style") or "style"
 
-        persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
+        persona_ref_count = self._effective_persona_ref_count(
+            persona_name,
+            self._is_ark_selfie_request(None, self._get_persona_selfie_chain(persona_name)),
+        )
         wardrobe_ref_index = persona_ref_count + 1
 
         from .core.daily_selfie import _build_strength_hint
@@ -2120,7 +2123,10 @@ class GiteeAIImagePlugin(Star):
         persona_name = await self._get_current_persona_name(event)
         persona_ref_count = 0
         if persona_name:
-            persona_ref_count = len(self._get_persona_config_selfie_reference_paths(persona_name))
+            persona_ref_count = self._effective_persona_ref_count(
+                persona_name,
+                self._is_ark_selfie_request(None, self._get_persona_selfie_chain(persona_name)),
+            )
 
         # 素材总在人设参考图之后注入；若有衣橱参考图则在其后一位
         base_index = persona_ref_count + 1
@@ -3502,6 +3508,33 @@ class GiteeAIImagePlugin(Star):
             self._is_ark_seedream_provider(pid) for pid in pids
         )
 
+    def _effective_persona_ref_count(self, persona_name: str, is_ark: bool) -> int:
+        """实际会送给生图模型的人设参考图张数，用于提示词里的参考图序号。
+
+        ark_seedream 只保留第一张人设图（衣橱图/部位素材/用户附图照常追加），
+        所以「WebUI 里配了几张」与「实际发了几张」可能是两回事——序号必须按后者算，
+        否则提示词会说出一个实际不存在的参考图序号。
+        is_ark 由调用方按各自口径给出：自拍用 _is_ark_selfie_request，
+        补拍用同名方法并传入本次会用到的 provider 列表。
+        """
+        n = len(self._get_persona_config_selfie_reference_paths(persona_name))
+        if n <= 1 or not is_ark:
+            return n
+        return 1
+
+    def _effective_persona_ref_count_for_daily_selfie(
+        self, persona_name: str, providers: list | None = None, only_pid: str = "",
+    ) -> int:
+        """补拍口径：按本次会用到的那批 provider（受 only_pid 过滤）判断是否整体落在 ark。"""
+        pids = [
+            {"provider_id": str((pv or {}).get("provider_id", ""))}
+            for pv in (providers or [])
+            if not only_pid or str((pv or {}).get("provider_id", "")) == only_pid
+        ]
+        return self._effective_persona_ref_count(
+            persona_name, self._is_ark_selfie_request(None, pids)
+        )
+
     def _resolve_selfie_ref_resolution(
         self, backend: str | None, chain_override: list | None,
     ) -> str | None:
@@ -3816,9 +3849,12 @@ class GiteeAIImagePlugin(Star):
             if persona_conf:
                 persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
-        # ark 人设图只剩 1 张，后置替换：把"前N张参考图"/"前N张人设参考图"统一改为"参考图"
-        # 例："以前三张参考图的少女" → "以参考图的少女"
-        if is_ark:
+        # ark 人设图只剩 1 张，此时"前N张参考图"要么冗余、要么指代不清：
+        # - 没有衣橱图：全局只有那 1 张，"参考图"就是它，替换后更自然
+        #   （"以前三张参考图的少女" → "以参考图的少女"）
+        # - 有衣橱图：参考图 = [人设图#1, 衣橱图#2]，必须保留"前1张"才能把两者区分开，
+        #   否则"以参考图中少女为基准"会被读成"以随附的任意一张参考图为基准"
+        if is_ark and not wardrobe_ref_appended:
             final_prompt = re.sub(r"前[三3两2一1\d]+张(?:人设)?参考图", "参考图", prompt)
         else:
             final_prompt = prompt
