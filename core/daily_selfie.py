@@ -2779,12 +2779,16 @@ class DailySelfieService:
             return ""
 
         wardrobe_index = persona_ref_count + 1
+        # cosplay 下场景由参考图决定，直接不传 r1 生成的场景：
+        # 否则模型同时收到「场景：夜晚的便利店」与「场景全部保留」两条冲突指令，
+        # 表现为同一类输入有时全保留、有时把背景换掉（自我发挥）。
+        scene_line = "" if style == "cosplay" else f"场景：{scene}\n"
         user_prompt = (
             f"【有衣橱参考图模式】随附图片即参考图{wardrobe_index}（衣橱参考图），"
             "请看图后构建1条引用式图像生成提示词，"
             f"参考图{wardrobe_index}中已有的维度一律用“保留参考图{wardrobe_index}的XX”表述：\n"
             f"风格：{style}\n"
-            f"场景：{scene}\n"
+            f"{scene_line}"
             f"参考图力度：{ref_strength}\n"
             "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图；"
             "参考图确是 cosplay／角色扮演照时一律全保留，仅移除遮脸相关元素）"
