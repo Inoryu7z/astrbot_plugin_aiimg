@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import io
 import json
 import random
@@ -1400,28 +1401,43 @@ class DailySelfieService:
         reviewer_provider_id = self._get_selfie_provider("reviewer", umo) or chat_provider_id
         prompt_engineer_provider_id = self._get_selfie_provider("prompt_engineer", umo) or chat_provider_id
 
-        styles_task = self._select_styles_by_algorithm(remaining, style_pool, recent_styles)
-        scenes_task = self._llm_round1_scene(scene_provider_id, remaining)
-
-        styles, scenes = await asyncio.gather(styles_task, scenes_task)
+        # 先 r0 后 r1：r0 是纯算法抽样，先拿到风格才知道 cosplay 占几条。
+        # cosplay 不进 r1——cos 场景由参考图决定，r1 场景概念对 cos 无意义，
+        # 还会污染搜图 query、在下游诱导场景自由发挥。
+        styles = await self._select_styles_by_algorithm(remaining, style_pool, recent_styles)
 
         if not styles:
             logger.warning("[DailySelfie] 人格 %s r0算法选风格未返回结果", persona_name)
             return 0, 0
-        if not scenes:
-            logger.warning("[DailySelfie] 人格 %s r1场景未返回结果", persona_name)
-            return 0, 0
 
-        pair_count = min(len(styles), len(scenes))
-        styles = styles[:pair_count]
-        scenes = scenes[:pair_count]
+        non_cos_count = sum(1 for s in styles if s != "cosplay")
+        if non_cos_count > 0:
+            scenes_non_cos = await self._llm_round1_scene(scene_provider_id, non_cos_count)
+            if not scenes_non_cos:
+                logger.warning("[DailySelfie] 人格 %s r1场景未返回结果", persona_name)
+                return 0, 0
+        else:
+            scenes_non_cos = []
+
+        # 场景按顺序回填到非 cosplay 位置；cosplay 位置一律空串，
+        # 下游（搜图 query / r4 有图模式）见到空串即视为「不限定场景」
+        scenes: list[str] = []
+        fill = 0
+        for s in styles:
+            if s == "cosplay":
+                scenes.append("")
+            else:
+                scenes.append(scenes_non_cos[fill] if fill < len(scenes_non_cos) else "")
+                fill += 1
+
+        pair_count = len(styles)
 
         logger.debug(
-            "[DailySelfie] 人格 %s r0算法选风格返回 %d 条，r1场景返回 %d 条场景，配对 %d 组",
-            persona_name, len(styles), len(scenes), pair_count,
+            "[DailySelfie] 人格 %s r0算法选风格返回 %d 条（cosplay %d 条不进 r1），r1场景返回 %d 条",
+            persona_name, len(styles), len(styles) - non_cos_count, len(scenes_non_cos),
         )
 
-        search_queries = [f"{s} {c}" for s, c in zip(styles, scenes)]
+        search_queries = [f"{s} {c}".strip() for s, c in zip(styles, scenes)]
 
         selfie_conf = self.plugin._get_feature("selfie")
         daily_ref_min_sim_raw = float(selfie_conf.get("daily_selfie_ref_min_similarity", 0) or 0)
@@ -1436,9 +1452,15 @@ class DailySelfieService:
         if any(s == "cosplay" for s in styles):
             per_query_sim = [0.0 if s == "cosplay" else daily_ref_min_sim for s in styles]
 
+        # cosplay 条目免向量召回：wardrobe 直接从 cosplay 风格图池按冷梯队取图，
+        # query / r1 场景与选图彻底无关（cos 场景由参考图决定）
+        per_query_direct_style: list[str] | None = None
+        if any(s == "cosplay" for s in styles):
+            per_query_direct_style = ["cosplay" if s == "cosplay" else "" for s in styles]
+
         # 搜图对所有后端一视同仁（ark_seedream 也不例外）：
         # ark 的唯一区别是生图时人设图只保留第一张，衣橱图照常注入
-        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim)
+        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim, per_query_direct_style=per_query_direct_style)
 
         # 任何风格无参考图 → 排除当前风格和近期风格，换一个风格重搜1次
         # 解决单图风格（如护士服）今日已用时搜不到图的问题
@@ -1453,12 +1475,15 @@ class DailySelfieService:
                     new_query = f"{new_style} {scenes[i]}"
                     # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
                     retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
+                    # 换到 cosplay 的重搜同样免向量召回，与主搜图口径一致
+                    retry_direct = ["cosplay"] if new_style == "cosplay" else None
                     logger.debug(
                         "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
                         persona_name, styles[i], new_style,
                     )
                     retry_ref = await self._search_reference_images(
                         [new_query], wardrobe, persona_name, min_similarity=retry_sim,
+                        per_query_direct_style=retry_direct,
                     )
                     styles[i] = new_style
                     if retry_ref and retry_ref[0] is not None:
@@ -2782,7 +2807,8 @@ class DailySelfieService:
         # cosplay 下场景由参考图决定，直接不传 r1 生成的场景：
         # 否则模型同时收到「场景：夜晚的便利店」与「场景全部保留」两条冲突指令，
         # 表现为同一类输入有时全保留、有时把背景换掉（自我发挥）。
-        scene_line = "" if style == "cosplay" else f"场景：{scene}\n"
+        # 场景为空串（cos 不进 r1 后的占位值）同样不传，防出现「场景：\n」空行。
+        scene_line = "" if (style == "cosplay" or not scene) else f"场景：{scene}\n"
         user_prompt = (
             f"【有衣橱参考图模式】随附图片即参考图{wardrobe_index}（衣橱参考图），"
             "请看图后构建1条引用式图像生成提示词，"
@@ -2972,9 +2998,26 @@ class DailySelfieService:
         persona_name: str = "",
         min_similarity: float | None = None,
         per_query_min_similarity: list[float | None] | None = None,
+        per_query_direct_style: list[str] | None = None,
     ) -> list[dict]:
+        """补拍搜图。
+
+        per_query_direct_style：与 queries 对齐的风格直取标记。cosplay 条目传 "cosplay"，
+        wardrobe 侧将跳过向量召回、直接从该风格图池按冷梯队取图（cos 场景由参考图决定，
+        r1 场景与 query 均不得影响选图）；空串条目走原有向量召回路径。
+        """
         used_ids: set[str] = set()
         results: list[dict | None] = [None] * len(queries)
+
+        # 旧版衣橱的 get_reference_image 不认识 direct_style：先检测签名，
+        # 不支持时干脆不传参（退回向量召回路径），而不是吞 TypeError 后
+        # 让 cosplay 条目全部落入「无参考图换风格」兜底
+        try:
+            supports_direct_style = (
+                "direct_style" in inspect.signature(wardrobe.get_reference_image).parameters
+            )
+        except (TypeError, ValueError):
+            supports_direct_style = False
 
         async def _search_one(idx: int, query: str) -> None:
             try:
@@ -2982,12 +3025,18 @@ class DailySelfieService:
                 if per_query_min_similarity and idx < len(per_query_min_similarity):
                     sim = per_query_min_similarity[idx]
                 if hasattr(wardrobe, "get_reference_image"):
-                    ref = await wardrobe.get_reference_image(
+                    kwargs: dict = dict(
                         query=query,
                         current_persona=persona_name,
                         min_similarity=sim,
                         daily_selfie_mode=True,
                     )
+                    if supports_direct_style:
+                        direct_style = ""
+                        if per_query_direct_style and idx < len(per_query_direct_style):
+                            direct_style = str(per_query_direct_style[idx] or "")
+                        kwargs["direct_style"] = direct_style
+                    ref = await wardrobe.get_reference_image(**kwargs)
                     if ref:
                         img_id = str(ref.get("image_id", ""))
                         if img_id and img_id not in used_ids and img_id not in self._today_used_image_ids:
