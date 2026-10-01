@@ -33,6 +33,12 @@ DESIGN_RETRY_DEADLINE_MINUTE = 30
 # r2→r3→r4 流水线批次错开启动间隔（秒），避免瞬间并发打满 provider
 BATCH_STAGGER_SECONDS = 30
 
+# 补拍行为版本标记（生效性探针）：每次补拍运行时随 INFO 日志打印，
+# 用于在日志里确认进程加载的代码版本——「改了但不生效」多半是 AstrBot 进程
+# 未重启/重载，日志里看不到对应版本标记即为铁证。
+# ⚠️ 纪律：改动补拍核心行为（r0/r1/搜图/r4 场景策略）时必须同步更新此常量。
+_SELFIE_BEHAVIOR_VERSION = "v2.1.3"
+
 
 def _clean_llm_line(line: str) -> str:
     line = line.strip()
@@ -1432,6 +1438,17 @@ class DailySelfieService:
 
         pair_count = len(styles)
 
+        # 生效性探针：日志里出现此行即证明进程加载的是当前版本代码；
+        # 若补拍运行时日志里找不到该标记，说明 AstrBot 进程未重启/重载旧代码
+        logger.info(
+            "[DailySelfie][%s] 风格=%s | cosplay=%d条(不进r1/直取/不改场景) | 非cos场景非空=%d/%d | 搜图=串行",
+            _SELFIE_BEHAVIOR_VERSION,
+            ",".join(styles) or "无",
+            sum(1 for s in styles if s == "cosplay"),
+            sum(1 for s in scenes if s),
+            non_cos_count,
+        )
+
         logger.debug(
             "[DailySelfie] 人格 %s r0算法选风格返回 %d 条（cosplay %d 条不进 r1），r1场景返回 %d 条",
             persona_name, len(styles), len(styles) - non_cos_count, len(scenes_non_cos),
@@ -1466,7 +1483,9 @@ class DailySelfieService:
         # 解决单图风格（如护士服）今日已用时搜不到图的问题
         recent_set = set(recent_styles)
         for i in range(pair_count):
-            if ref_results[i] is None:
+            if ref_results[i] is None and styles[i] != "cosplay":
+                # cosplay 条目不走换风格兜底（见 _drop_failed_cos_entries），
+                # 非 cosplay 条目保留原有兜底：换风格重搜 1 次
                 alt_pool = [s for s in style_pool if s != styles[i] and s not in recent_set]
                 if not alt_pool:
                     alt_pool = [s for s in style_pool if s != styles[i]]
@@ -1488,6 +1507,19 @@ class DailySelfieService:
                     styles[i] = new_style
                     if retry_ref and retry_ref[0] is not None:
                         ref_results[i] = retry_ref[0]
+
+        # cosplay 条目搜图失败 → 直接放弃该条，绝不降级：
+        # 换风格后该条会以非 cosplay 身份处理 cos 参考图（reimagine 改场景），
+        # 产出「图是 cos、场景却被换」的缝合品
+        styles, scenes, ref_results, dropped_cos = self._drop_failed_cos_entries(styles, scenes, ref_results)
+        if dropped_cos:
+            fail += dropped_cos
+            logger.warning(
+                "[DailySelfie] 人格 %s %d 条 cosplay 未找到参考图，放弃该条（不换风格、不改场景）",
+                persona_name, dropped_cos,
+            )
+            self._record_debug("WARN", f"{dropped_cos} 条 cosplay 无参考图，放弃（不换风格）")
+        pair_count = len(styles)
 
         ref_by_pair: dict[int, dict] = {}
         for i, ref in enumerate(ref_results):
@@ -2804,24 +2836,47 @@ class DailySelfieService:
             return ""
 
         wardrobe_index = persona_ref_count + 1
-        # cosplay 下场景由参考图决定，直接不传 r1 生成的场景：
-        # 否则模型同时收到「场景：夜晚的便利店」与「场景全部保留」两条冲突指令，
-        # 表现为同一类输入有时全保留、有时把背景换掉（自我发挥）。
-        # 场景为空串（cos 不进 r1 后的占位值）同样不传，防出现「场景：\n」空行。
-        scene_line = "" if (style == "cosplay" or not scene) else f"场景：{scene}\n"
-        user_prompt = (
-            f"【有衣橱参考图模式】随附图片即参考图{wardrobe_index}（衣橱参考图），"
-            "请看图后构建1条引用式图像生成提示词，"
-            f"参考图{wardrobe_index}中已有的维度一律用“保留参考图{wardrobe_index}的XX”表述：\n"
-            f"风格：{style}\n"
-            f"{scene_line}"
-            f"参考图力度：{ref_strength}\n"
-            "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图；"
-            "参考图确是 cosplay／角色扮演照时一律全保留，仅移除遮脸相关元素）"
-        )
+        if style == "cosplay":
+            scene_line = f"场景：严格保留参考图{wardrobe_index}的场景，禁止任何场景改动\n"
+            # cosplay 走独立的铁律 user_prompt，与其他风格彻底隔离：
+            # 1) 不传「参考图力度」行、不出现 full/style/reimagine 策略表——
+            #    保留策略文本是模型可抓取的「重新设计」依据（反例产出正是
+            #    reimagine 策略行的保留组合），铁律模式下这些文本一律不出现；
+            # 2) 全保留要求用最高权重、最短路径直接砸在 user_prompt 里，
+            #    不依赖模型从长系统提示词里检索 cosplay 约束章节。
+            user_prompt = (
+                f"【有衣橱参考图模式·cosplay 全保留铁律】随附图片即参考图{wardrobe_index}（衣橱参考图）。\n"
+                f"本条为 cosplay。除移除遮挡面部的元素并为原持有遮脸物的手分配简单新动作外，"
+                f"服装、发型、配饰、姿势、腿部动作、构图、场景、道具、氛围一律与参考图{wardrobe_index}完全一致，"
+                f"禁止任何重新设计、更换或凭空添加。\n"
+                f"{scene_line}"
+                f"（本条固定按全保留执行，无需判断任何保留策略；"
+                f"输出仍按系统提示词的固定开头与固定收尾句构建，末尾按规则13追加宽高比）"
+            )
+        else:
+            # 非 cosplay：场景行全显式，不留「静默不传让模型猜」的空间
+            if scene:
+                scene_line = f"场景：{scene}\n"
+            else:
+                scene_line = f"场景：沿用参考图{wardrobe_index}的场景\n"
+            user_prompt = (
+                f"【有衣橱参考图模式】随附图片即参考图{wardrobe_index}（衣橱参考图），"
+                "请看图后构建1条引用式图像生成提示词，"
+                f"参考图{wardrobe_index}中已有的维度一律用“保留参考图{wardrobe_index}的XX”表述：\n"
+                f"风格：{style}\n"
+                f"{scene_line}"
+                f"参考图力度：{ref_strength}\n"
+                "（full=完全模仿姿势和构图，style=保留服装重新设计姿势，reimagine=保留服装重新设计姿势和构图）"
+            )
 
         effective_prompt = system_prompt or _apply_persona_ref_count(
             _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, persona_ref_count
+        )
+        # 生效性探针（debug 级）：cos 条目每次 r4 调用都记录场景行形态，
+        # 供排查「场景被改」时确认本条走的是哪种策略
+        logger.debug(
+            "[DailySelfie][%s] r4 场景行: style=%s scene入参=%r 场景行=%r",
+            _SELFIE_BEHAVIOR_VERSION, style, scene, scene_line.strip(),
         )
 
         for attempt in range(2):
@@ -2991,6 +3046,29 @@ class DailySelfieService:
             )
             return (0, 0, {}, [])
 
+    @staticmethod
+    def _drop_failed_cos_entries(
+        styles: list[str], scenes: list[str], ref_results: list[dict | None],
+    ) -> tuple[list[str], list[str], list[dict | None], int]:
+        """剔除搜图失败的 cosplay 条目，返回 (styles, scenes, ref_results, 放弃条数)。
+
+        cosplay 搜图失败时绝不换风格降级：换风格后该条以非 cosplay 身份处理
+        cos 参考图（reimagine 改场景），产出「cos 图被改场景」的缝合品。
+        「没找到就是没找到」——放弃该条比产出改场景的图更符合需求。
+        """
+        kept_styles: list[str] = []
+        kept_scenes: list[str] = []
+        kept_refs: list[dict | None] = []
+        dropped = 0
+        for style, scene, ref in zip(styles, scenes, ref_results):
+            if style == "cosplay" and ref is None:
+                dropped += 1
+                continue
+            kept_styles.append(style)
+            kept_scenes.append(scene)
+            kept_refs.append(ref)
+        return kept_styles, kept_scenes, kept_refs, dropped
+
     async def _search_reference_images(
         self,
         queries: list[str],
@@ -3048,7 +3126,12 @@ class DailySelfieService:
             except Exception as e:
                 logger.warning("[DailySelfie] 参考图搜索失败: query=%s error=%s", query[:50], e)
 
-        await asyncio.gather(*[_search_one(i, q) for i, q in enumerate(queries)])
+        # 串行逐条搜图，禁止并发：cosplay 直取是确定性 top1，并发时多张 cosplay
+        # 会在同一库状态下拿到同一张图，除第一张外全部命中「今日已用」被跳过，
+        # 进而触发换风格、产出「cos 图被改场景」的缝合品。串行后前一张的
+        # increment_use_count_by_persona 已落库，后一张拉池热度已变，top1 自然轮转。
+        for _i, _q in enumerate(queries):
+            await _search_one(_i, _q)
         return results
 
     async def _get_style_pool(self, wardrobe: Any, persona_name: str = "") -> list[str]:
