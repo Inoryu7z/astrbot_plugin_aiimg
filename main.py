@@ -1594,9 +1594,40 @@ class GiteeAIImagePlugin(Star):
 
         yield event.plain_result(msg)
 
+    @staticmethod
+    def _decide_auto_toggle(chain_pids: list[str], current: str) -> str:
+        """链上恰好两个后端时，轮切后的 override 值（空串=恢复默认顺序）。
+
+        - 未设置 override → 用第二个后端当首选（变成 2 → 1）
+        - 已处于轮切态 → 清空，回到默认顺序（1 → 2）
+        """
+        default_lead, fallback = chain_pids[0], chain_pids[1]
+        if current and current != default_lead:
+            return ""
+        return fallback
+
+    async def _auto_route_chain_pids(self, event: AstrMessageEvent) -> list[str]:
+        """auto 实际会用到的链路候选（文生图 / 改图 / 当前人格自拍），按出现顺序去重。"""
+        out: list[str] = []
+        for name in ("draw", "edit"):
+            chain = self._get_feature(name).get("chain", [])
+            if not isinstance(chain, list):
+                continue
+            for item in chain:
+                pid = self._extract_chain_provider_id(item)
+                if pid and pid not in out:
+                    out.append(pid)
+        persona_name = await self._get_current_persona_name(event)
+        if persona_name:
+            for item in self._get_persona_selfie_chain(persona_name) or []:
+                pid = self._extract_chain_provider_id(item)
+                if pid and pid not in out:
+                    out.append(pid)
+        return out
+
     @filter.command("auto")
     async def switch_auto_backend(self, event: AstrMessageEvent, target: str = ""):
-        """临时切换 auto 链路的首选服务商（仅本次运行有效，重启自动恢复）"""
+        """临时切换 auto 链路的首选服务商；链上恰好两个后端时，无参数即在这两个之间轮切。仅本次运行有效。"""
         arg = (target or "").strip()
         labels = self.registry.provider_labels(kind="image")
         image_ids = [
@@ -1611,6 +1642,21 @@ class GiteeAIImagePlugin(Star):
             return f"{pid}（{label}）" if label else pid
 
         if not arg:
+            chain_pids = await self._auto_route_chain_pids(event)
+            if len(chain_pids) == 2:
+                default_lead, fallback = chain_pids[0], chain_pids[1]
+                next_override = self._decide_auto_toggle(chain_pids, current)
+                self.registry.set_route_override(next_override)
+                if next_override:
+                    yield event.plain_result(
+                        f"🔁 已轮切: {_fmt(default_lead)} → {_fmt(fallback)}"
+                    )
+                else:
+                    yield event.plain_result(
+                        f"🔁 已切回默认顺序: {_fmt(default_lead)} → {_fmt(fallback)}"
+                    )
+                return
+
             msg = "🎯 auto 链路临时首选\n"
             msg += "━━━━━━━━━━━━━━\n"
             if current:
@@ -1707,7 +1753,7 @@ class GiteeAIImagePlugin(Star):
         【适用范围】本工具生成新图片（自拍 / 文生图 / 改图），不接触图库里已有的照片。
         按动词判断走哪个工具：用户说“拍一张/画一张/生成一张”，要的是新产出的图，用本工具；说“发一张/找一张/之前那张再看看”，要的是图库里已有的那张，用 search_wardrobe_image。要视频用 aiimg_video。
 
-        【参考图编号规则】人设图占 图1…图N（走 ark_seedream 后端时只有 1 张），衣橱图、部位素材图、用户附图依次排在其后；提示词里的「参考图N」一律以 aiimg_wardrobe_preview / aiimg_asset_preview 返回的「这张参考图的序号为X」为准，不要沿用技能文档里写死的编号。
+        【参考图编号规则】人设图占 图1…图N（本次可能只有 1 张），衣橱图、部位素材图、用户附图依次排在其后；提示词里的「参考图N」一律以 aiimg_wardrobe_preview / aiimg_asset_preview 返回的「这张参考图的序号为X」为准，不要沿用技能文档里写死的编号。
 
         使用建议：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
