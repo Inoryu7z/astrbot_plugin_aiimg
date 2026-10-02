@@ -3668,6 +3668,26 @@ class GiteeAIImagePlugin(Star):
             return n
         return 1
 
+    @staticmethod
+    def _shift_ref_index(prompt: str, lead_count: int, actual_count: int) -> str:
+        """按命中后端的人设图张数，平移提示词里的「参考图N」编号。
+
+        只平移编号 > lead_count 的（人设图之外的额外参考图：衣橱图/部位素材/用户图）；
+        人设图自身编号（≤ lead_count）以及「第1张参考图」这类不带编号的表述原样保留。
+        lead_count = 构建提示词时按链首算的张数，actual_count = 本次实际命中后端的张数。
+        """
+        delta = actual_count - lead_count
+        if not prompt or delta == 0:
+            return prompt
+
+        def _sub(m: re.Match) -> str:
+            idx = int(m.group(2))
+            if idx <= lead_count:
+                return m.group(0)
+            return f"参考图{m.group(1)}{idx + delta}"
+
+        return re.sub(r"参考图(\s*)(\d+)", _sub, prompt)
+
     def _effective_persona_ref_count_for_daily_selfie(
         self, persona_name: str, providers: list | None = None, only_pid: str = "",
     ) -> int:
@@ -3889,6 +3909,27 @@ class GiteeAIImagePlugin(Star):
             persona_default_output or "none",
         )
 
+        # 提示词是按「链首」的人设图张数写的；一旦兜底切到别的后端，张数可能变，
+        # 额外参考图的「参考图N」必须跟着平移，否则编号会指向不存在的图
+        lead_ref_count = self._effective_persona_ref_count(
+            persona_name, self._selfie_chain_lead_is_ark(chain_override)
+        )
+
+        def _prepare_prompt(pid: str) -> str:
+            actual_count = self._effective_persona_ref_count(
+                persona_name, self._is_ark_seedream_provider(pid)
+            )
+            if actual_count == lead_ref_count:
+                return final_prompt
+            logger.debug(
+                "[selfie] provider=%s 人设图 %d→%d，参考图编号平移 %+d",
+                pid,
+                lead_ref_count,
+                actual_count,
+                actual_count - lead_ref_count,
+            )
+            return self._shift_ref_index(final_prompt, lead_ref_count, actual_count)
+
         image_path = await self.edit.edit(
             prompt=final_prompt,
             images=images,
@@ -3898,6 +3939,7 @@ class GiteeAIImagePlugin(Star):
             default_output=persona_default_output,
             chain_override=chain_override,
             prepare_images=_prepare_images,
+            prepare_prompt=_prepare_prompt,
         )
         used_pid = self.edit.last_success_provider
         return image_path, used_pid, wardrobe_ref_user_tags

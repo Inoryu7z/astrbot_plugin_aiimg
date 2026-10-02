@@ -111,6 +111,7 @@ class EditRouter:
         default_output: str | None = None,
         chain_override: list | None = None,
         prepare_images: Callable[[str], list[bytes]] | None = None,
+        prepare_prompt: Callable[[str], str] | None = None,
     ) -> Path:
         feature = self._feature_conf()
         if not bool(feature.get("enabled", True)):
@@ -176,6 +177,19 @@ class EditRouter:
                 if prepared:
                     call_images = prepared
 
+            # 提示词同样按命中者准备：人设图张数一变，额外参考图的「参考图N」编号要跟着平移
+            call_prompt = prompt
+            if prepare_prompt is not None:
+                try:
+                    prepared_prompt = prepare_prompt(pid)
+                except Exception as e:
+                    logger.warning(
+                        "[edit] prepare_prompt(%s) 失败，使用原始提示词: %s", pid, e
+                    )
+                    prepared_prompt = None
+                if prepared_prompt:
+                    call_prompt = prepared_prompt
+
             if size or resolution:
                 final_size = size
                 final_res = resolution
@@ -197,11 +211,11 @@ class EditRouter:
                         raise RuntimeError("Provider does not support edit()")
                     if isinstance(backend_obj, GiteeEditBackend):
                         result = await backend_obj.edit(
-                            prompt, call_images, task_types=final_task_types
+                            call_prompt, call_images, task_types=final_task_types
                         )
                     else:
                         result = await edit_fn(
-                            prompt,
+                            call_prompt,
                             call_images,
                             size=final_size,
                             resolution=final_res,
