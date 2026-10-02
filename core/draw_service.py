@@ -28,6 +28,8 @@ class ImageDrawService:
         self.registry = registry or ProviderRegistry(
             self.config, imgr=self.imgr, data_dir=self.data_dir
         )
+        # 最近一次 generate() 的失败尝试次数（含重试与切换服务商），供上层读取
+        self.last_failed_attempts: int = 0
 
     def _feature_conf(self) -> dict:
         feats = as_dict(self.config.get("features"))
@@ -60,6 +62,7 @@ class ImageDrawService:
             )
 
         candidates: list[tuple[str, str]] = []
+        self.last_failed_attempts = 0
         if provider_id:
             candidates = [(str(provider_id).strip(), "")]
         else:
@@ -83,6 +86,7 @@ class ImageDrawService:
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
+                self.last_failed_attempts += 1
                 logger.info("[draw] Provider=%s 后端构建失败: %s", pid, e)
                 continue
 
@@ -116,6 +120,7 @@ class ImageDrawService:
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
+                    self.last_failed_attempts += 1
                     if attempt + 1 < max_attempts:
                         logger.info(
                             "[draw] Provider=%s 第%d次失败: %s，准备重试...",

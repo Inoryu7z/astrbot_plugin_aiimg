@@ -1824,11 +1824,14 @@ class GiteeAIImagePlugin(Star):
             image_path, result_mode, used_pid, ref_user_tags = await self._execute_llm_tool_generate_core(
                 event, prompt, m, target_backend, size, resolution, use_wardrobe, use_wardrobe_ref, use_asset, asset_id
             )
-            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid, user_tags=ref_user_tags)
+            return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid, user_tags=ref_user_tags, text_mode=(m == "text"))
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
             await self._signal_llm_tool_failure(event)
-            return self._build_llm_tool_failure_result(str(e))
+            return self._build_llm_tool_failure_result(
+                str(e),
+                self._draw_fail_count_line(m == "text", self.draw.last_failed_attempts),
+            )
         finally:
             await self._end_user_job(user_id, kind="image")
 
@@ -3132,7 +3135,7 @@ class GiteeAIImagePlugin(Star):
         await asyncio.to_thread(tool_image_dir.mkdir, parents=True, exist_ok=True)
 
     async def _build_llm_tool_image_result(
-            self, image_path: Path
+            self, image_path: Path, extra: str = ""
     ) -> mcp.types.CallToolResult | None:
         try:
             compressed_bytes = await asyncio.to_thread(
@@ -3145,7 +3148,7 @@ class GiteeAIImagePlugin(Star):
                 content=[
                     mcp.types.TextContent(
                         type="text",
-                        text="根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。此刻你与用户首次同时看到这张刚生成的图片，用户尚未做出任何反应。请根据你看到的图片内容，以符合你人设的口吻生成一段回复。",
+                        text="根据要求生成的图片已直接发送给用户，无需调用 send_message_to_user 再次发送。此刻你与用户首次同时看到这张刚生成的图片，用户尚未做出任何反应。请根据你看到的图片内容，以符合你人设的口吻生成一段回复。" + extra,
                     ),
                     mcp.types.ImageContent(
                         type="image",
@@ -3159,16 +3162,25 @@ class GiteeAIImagePlugin(Star):
             return None
 
     @staticmethod
-    def _build_llm_tool_failure_result(reason: str = "") -> mcp.types.CallToolResult:
-        text = "图片生成失败" + (f"：{reason}" if reason else "") + "。请以符合你人设的口吻告知用户此结果，不要直接复述原始错误信息。"
+    def _draw_fail_count_line(text_mode: bool, fail_count: int) -> str:
+        """text 模式的额外返回行：只给一个失败计数器。非 text 模式或 0 次时返回空串。"""
+        if not text_mode or fail_count <= 0:
+            return ""
+        return f"\n本次生成连续失败次数：{fail_count}"
+
+    @staticmethod
+    def _build_llm_tool_failure_result(
+        reason: str = "", extra: str = ""
+    ) -> mcp.types.CallToolResult:
+        text = "图片生成失败" + (f"：{reason}" if reason else "") + "。请以符合你人设的口吻告知用户此结果，不要直接复述原始错误信息。" + extra
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
 
     @staticmethod
-    def _build_llm_tool_text_desc_result(prompt: str) -> mcp.types.CallToolResult:
+    def _build_llm_tool_text_desc_result(prompt: str, extra: str = "") -> mcp.types.CallToolResult:
         desc = str(prompt or "").strip()
-        text = f"已发送图片给用户" + (f"：{desc}" if desc else "") + "。无需调用 send_message_to_user。"
+        text = f"已发送图片给用户" + (f"：{desc}" if desc else "") + "。无需调用 send_message_to_user。" + extra
         return mcp.types.CallToolResult(
             content=[mcp.types.TextContent(type="text", text=text)]
         )
@@ -3190,14 +3202,18 @@ class GiteeAIImagePlugin(Star):
             mode: str = "",
             used_pid: str | None = None,
             user_tags: str = "",
+            text_mode: bool = False,
     ) -> mcp.types.CallToolResult | None:
         self._remember_last_image(event, image_path, mode=mode, prompt=prompt, user_tags=user_tags)
+
+        # text 模式额外返回一行失败计数器（0 次或非 text 模式为空）
+        extra = self._draw_fail_count_line(text_mode, self.draw.last_failed_attempts)
 
         sent = await self._send_image_with_fallback(event, image_path)
         if not sent:
             await self._signal_llm_tool_failure(event)
             logger.warning("[aiimg] 无损原图发送失败: reason=%s", sent.reason)
-            return self._build_llm_tool_failure_result("图片发送失败")
+            return self._build_llm_tool_failure_result("图片发送失败", extra)
 
         await mark_success(event)
 
@@ -3210,16 +3226,16 @@ class GiteeAIImagePlugin(Star):
             return None
 
         if ctx_mode == "text":
-            return self._build_llm_tool_text_desc_result(prompt)
+            return self._build_llm_tool_text_desc_result(prompt, extra)
 
         await self._ensure_tool_image_cache_dir()
-        result = await self._build_llm_tool_image_result(image_path)
+        result = await self._build_llm_tool_image_result(image_path, extra)
         if result is not None:
             # 图片即将回传给 LLM 看图：先切到能看图的模型，否则图片会被丢弃
             await self._ensure_vision_model_before_image_return(event)
             return result
         logger.warning("[aiimg] LLM 上下文图片构建失败，降级文字描述")
-        return self._build_llm_tool_text_desc_result(prompt)
+        return self._build_llm_tool_text_desc_result(prompt, extra)
 
     async def _track_selfie_quota(self, event: AstrMessageEvent, *, used_pid: str | None = None) -> None:
         try:
