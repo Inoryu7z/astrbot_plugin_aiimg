@@ -1606,28 +1606,21 @@ class GiteeAIImagePlugin(Star):
             return ""
         return fallback
 
-    async def _auto_route_chain_pids(self, event: AstrMessageEvent) -> list[str]:
-        """auto 实际会用到的链路候选（文生图 / 改图 / 当前人格自拍），按出现顺序去重。"""
-        out: list[str] = []
-        for name in ("draw", "edit"):
-            chain = self._get_feature(name).get("chain", [])
-            if not isinstance(chain, list):
-                continue
-            for item in chain:
-                pid = self._extract_chain_provider_id(item)
-                if pid and pid not in out:
-                    out.append(pid)
+    async def _selfie_chain_pids(self, event: AstrMessageEvent) -> list[str]:
+        """/auto 的作用域＝当前人格的自拍链（其他链路一概不管），按顺序去重。"""
         persona_name = await self._get_current_persona_name(event)
-        if persona_name:
-            for item in self._get_persona_selfie_chain(persona_name) or []:
-                pid = self._extract_chain_provider_id(item)
-                if pid and pid not in out:
-                    out.append(pid)
+        if not persona_name:
+            return []
+        out: list[str] = []
+        for item in self._get_persona_selfie_chain(persona_name) or []:
+            pid = self._extract_chain_provider_id(item)
+            if pid and pid not in out:
+                out.append(pid)
         return out
 
     @filter.command("auto")
     async def switch_auto_backend(self, event: AstrMessageEvent, target: str = ""):
-        """临时切换 auto 链路的首选服务商；链上恰好两个后端时，无参数即在这两个之间轮切。仅本次运行有效。"""
+        """临时切换自拍链路的首选服务商（只管自拍，文生图/改图不受影响）；链上恰好两个后端时，无参数即在这两个之间轮切。仅本次运行有效。"""
         arg = (target or "").strip()
         labels = self.registry.provider_labels(kind="image")
         image_ids = [
@@ -1642,7 +1635,13 @@ class GiteeAIImagePlugin(Star):
             return f"{pid}（{label}）" if label else pid
 
         if not arg:
-            chain_pids = await self._auto_route_chain_pids(event)
+            chain_pids = await self._selfie_chain_pids(event)
+            if not chain_pids:
+                yield event.plain_result(
+                    "⚠️ 当前对话未绑定人格，或该人格未配置自拍链路。\n"
+                    "/auto 只作用于自拍链路（文生图、改图不受影响）。"
+                )
+                return
             if len(chain_pids) == 2:
                 default_lead, fallback = chain_pids[0], chain_pids[1]
                 next_override = self._decide_auto_toggle(chain_pids, current)
@@ -1663,7 +1662,7 @@ class GiteeAIImagePlugin(Star):
                 msg += f"当前: {_fmt(current)}\n"
             else:
                 msg += "当前: 未设置（按配置的链路顺序）\n"
-            msg += "生效范围: 文生图 / 改图 / 自拍（视频与补拍不受影响）\n"
+            msg += "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
             msg += "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复\n"
             msg += "━━━━━━━━━━━━━━\n"
             if image_ids:
@@ -1693,7 +1692,7 @@ class GiteeAIImagePlugin(Star):
         self.registry.set_route_override(pid)
         yield event.plain_result(
             f"✅ auto 临时首选已切换为 {_fmt(pid)}\n"
-            "生效范围: 文生图 / 改图 / 自拍（视频与补拍不受影响）\n"
+            "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
             "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复；/auto off 立即恢复"
         )
 

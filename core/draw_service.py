@@ -37,9 +37,7 @@ class ImageDrawService:
         return str(self._feature_conf().get("default_output") or "").strip()
 
     def _chain(self) -> list:
-        """features.draw.chain，叠加 /auto 临时首选（有则提到链首，兜底保留）。"""
-        chain = as_list(self._feature_conf().get("chain"))
-        return as_list(self.registry.apply_route_override(chain))
+        return as_list(self._feature_conf().get("chain"))
 
     def _candidate_ids(self) -> list[str]:
         return [pid for pid, _ in candidates_from_chain(self._chain())]
