@@ -23,6 +23,7 @@ from .jimeng_api_backend import JimengApiBackend
 from .openai_chat_image_backend import OpenAIChatImageBackend
 from .openai_compat_backend import OpenAICompatBackend
 from .openai_full_url_backend import OpenAIFullURLBackend
+from .provider_chain import parse_chain_item
 from .vercel_seedream_backend import VercelSeedreamBackend
 from .vertex_ai_anonymous_backend import (
     VertexAIAnonymousBackend,
@@ -72,6 +73,9 @@ class ProviderRegistry:
         self._providers: dict[str, dict] = {}
         self._backends: dict[str, object] = {}
         self._video_backends: dict[str, object] = {}
+
+        # auto 链路的临时首选 provider（内存态，重启即失效；空串=未设置）
+        self._route_override: str = ""
 
         self._load_providers()
 
@@ -356,6 +360,34 @@ class ProviderRegistry:
                     errors.append(f"provider '{provider_id}' missing model")
 
         return errors
+
+    def set_route_override(self, provider_id: str) -> None:
+        """设置 auto 链路的临时首选 provider；传空串即清除。
+
+        仅内存态：不写配置、不落盘，AstrBot 重启后自动恢复原链路顺序。
+        """
+        self._route_override = str(provider_id or "").strip()
+
+    def get_route_override(self) -> str:
+        return self._route_override
+
+    def apply_route_override(self, chain: list | None) -> list | None:
+        """把临时首选 provider 提到链首，其余项顺序不变（兜底保留）。
+
+        - 未设置 override → 原样返回
+        - override 已在链上 → 只提到首位，不重复插入
+        - 幂等：连续应用两次结果一致
+        """
+        ov = (self._route_override or "").strip()
+        if not ov:
+            return chain
+        base = chain if isinstance(chain, list) else []
+        rest = [
+            item
+            for item in base
+            if (parse_chain_item(item) or ("", ""))[0] != ov
+        ]
+        return [{"provider_id": ov}] + rest
 
     def provider_ids(self) -> list[str]:
         return list(self._providers.keys())

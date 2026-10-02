@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from astrbot.api import logger
@@ -49,7 +49,9 @@ class EditRouter:
         return str(self._feature_conf().get("default_output") or "").strip()
 
     def _chain(self) -> list:
-        return as_list(self._feature_conf().get("chain"))
+        """features.edit.chain，叠加 /auto 临时首选（有则提到链首，兜底保留）。"""
+        chain = as_list(self._feature_conf().get("chain"))
+        return as_list(self.registry.apply_route_override(chain))
 
     def _load_presets(self) -> dict[str, str]:
         presets: dict[str, str] = {}
@@ -110,6 +112,7 @@ class EditRouter:
         resolution: str | None = None,
         default_output: str | None = None,
         chain_override: list | None = None,
+        prepare_images: Callable[[str], list[bytes]] | None = None,
     ) -> Path:
         feature = self._feature_conf()
         if not bool(feature.get("enabled", True)):
@@ -161,6 +164,20 @@ class EditRouter:
                 logger.info("[edit] Provider=%s 后端构建失败: %s", pid, e)
                 continue
 
+            # 按本次实际命中的 provider 准备输入图（如 ark_seedream 仅保留第一张人设图）。
+            # 回调缺省 None 时行为与旧版一致，所见即 images。
+            call_images = images
+            if prepare_images is not None:
+                try:
+                    prepared = prepare_images(pid)
+                except Exception as e:
+                    logger.warning(
+                        "[edit] prepare_images(%s) 失败，使用原始图: %s", pid, e
+                    )
+                    prepared = None
+                if prepared:
+                    call_images = prepared
+
             if size or resolution:
                 final_size = size
                 final_res = resolution
@@ -182,12 +199,12 @@ class EditRouter:
                         raise RuntimeError("Provider does not support edit()")
                     if isinstance(backend_obj, GiteeEditBackend):
                         result = await backend_obj.edit(
-                            prompt, images, task_types=final_task_types
+                            prompt, call_images, task_types=final_task_types
                         )
                     else:
                         result = await edit_fn(
                             prompt,
-                            images,
+                            call_images,
                             size=final_size,
                             resolution=final_res,
                         )

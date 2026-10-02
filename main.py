@@ -52,6 +52,7 @@ from .core.image_manager import ImageManager
 from .core.nanobanana import NanoBananaService
 from .core.provider_registry import ProviderRegistry
 from .core.ref_store import ReferenceStore
+from .core.selfie_refs import trim_persona_refs
 from .core.utils import close_session, get_images_from_event
 from .core.video_manager import VideoManager
 
@@ -78,7 +79,7 @@ class GiteeAIImagePlugin(Star):
         "aiedit", "改图", "图生图", "修图", "draw", "aiimg",
         "文生图", "生图", "画图", "绘图", "出图", "aidraw",
         "视频", "video", "自拍", "自拍参考", "补拍", "补拍状态",
-        "重发图片", "预设列表", "视频预设列表", "改图帮助",
+        "重发图片", "预设列表", "视频预设列表", "改图帮助", "auto",
     }
 
     @filter.event_message_type(EventMessageType.ALL, priority=100)
@@ -1590,6 +1591,63 @@ class GiteeAIImagePlugin(Star):
 
         yield event.plain_result(msg)
 
+    @filter.command("auto")
+    async def switch_auto_backend(self, event: AstrMessageEvent, target: str = ""):
+        """临时切换 auto 链路的首选服务商（仅本次运行有效，重启自动恢复）"""
+        arg = (target or "").strip()
+        labels = self.registry.provider_labels(kind="image")
+        image_ids = [
+            pid
+            for pid in self.registry.provider_ids()
+            if str((self.registry.get(pid) or {}).get("kind") or "").strip() == "image"
+        ]
+        current = self.registry.get_route_override()
+
+        def _fmt(pid: str) -> str:
+            label = labels.get(pid, "")
+            return f"{pid}（{label}）" if label else pid
+
+        if not arg:
+            msg = "🎯 auto 链路临时首选\n"
+            msg += "━━━━━━━━━━━━━━\n"
+            if current:
+                msg += f"当前: {_fmt(current)}\n"
+            else:
+                msg += "当前: 未设置（按配置的链路顺序）\n"
+            msg += "生效范围: 文生图 / 改图 / 自拍（视频与补拍不受影响）\n"
+            msg += "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复\n"
+            msg += "━━━━━━━━━━━━━━\n"
+            if image_ids:
+                msg += "可用服务商:\n"
+                for pid in image_ids:
+                    msg += f"  • {_fmt(pid)}\n"
+            else:
+                msg += "⚠️ 未找到图片类服务商\n"
+            msg += "━━━━━━━━━━━━━━\n"
+            msg += "用法: /auto <服务商ID或显示名> | /auto off"
+            yield event.plain_result(msg)
+            return
+
+        if arg.lower() in {"off", "auto", "default", "默认", "恢复", "清除", "关"}:
+            self.registry.set_route_override("")
+            yield event.plain_result("✅ 已清除 auto 临时首选，恢复按配置的链路顺序")
+            return
+
+        pid = self.registry.resolve_backend(arg, kind="image")
+        if not pid:
+            yield event.plain_result(
+                f"❌ 未找到图片类服务商「{arg}」\n"
+                "用 /auto 查看可用服务商（显示名或 provider_id 均可）"
+            )
+            return
+
+        self.registry.set_route_override(pid)
+        yield event.plain_result(
+            f"✅ auto 临时首选已切换为 {_fmt(pid)}\n"
+            "生效范围: 文生图 / 改图 / 自拍（视频与补拍不受影响）\n"
+            "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复；/auto off 立即恢复"
+        )
+
     # ==================== LLM 工具 ====================
 
     @filter.llm_tool(name="aiimg_draw")
@@ -1994,7 +2052,9 @@ class GiteeAIImagePlugin(Star):
 
         persona_ref_count = self._effective_persona_ref_count(
             persona_name,
-            self._is_ark_selfie_request(None, self._get_persona_selfie_chain(persona_name)),
+            self._selfie_chain_lead_is_ark(
+                self._persona_selfie_chain_effective(persona_name)
+            ),
         )
         wardrobe_ref_index = persona_ref_count + 1
 
@@ -2125,7 +2185,9 @@ class GiteeAIImagePlugin(Star):
         if persona_name:
             persona_ref_count = self._effective_persona_ref_count(
                 persona_name,
-                self._is_ark_selfie_request(None, self._get_persona_selfie_chain(persona_name)),
+                self._selfie_chain_lead_is_ark(
+                    self._persona_selfie_chain_effective(persona_name)
+                ),
             )
 
         # 素材总在人设参考图之后注入；若有衣橱参考图则在其后一位
@@ -3385,6 +3447,21 @@ class GiteeAIImagePlugin(Star):
             return None
         return None
 
+    def _persona_selfie_chain_effective(self, persona_name: str) -> list | None:
+        """人格自拍链 + /auto 临时首选（有则提到链首，其余兜底保留）。"""
+        return self.registry.apply_route_override(
+            self._get_persona_selfie_chain(persona_name)
+        )
+
+    def _selfie_chain_lead_is_ark(self, chain: list | None) -> bool:
+        """链路首个 provider 是否为 ark_seedream。
+
+        参考图序号必须提前写进提示词、只能猜一次，因此按「最可能命中的那个」
+        （链首）算，而不是要求整条链都是 ark。
+        """
+        pids = self._collect_selfie_pids(None, chain)
+        return bool(pids) and self._is_ark_seedream_provider(pids[0])
+
     def _get_persona_video_chain(self, persona_name: str) -> list[str] | None:
         """从 selfie_persona_1/2/3 查找匹配人格的视频链路"""
         for idx in [1, 2, 3]:
@@ -3583,17 +3660,16 @@ class GiteeAIImagePlugin(Star):
             event, persona_name=persona_name
         )
 
-        # ark_seedream：人设参考图只保留第一张
-        # 只裁人设图，衣橱图/部位素材/用户附图照常追加（见下方 append 逻辑）
-        if len(ref_paths) > 1 and self._is_ark_selfie_request(
-            backend, self._get_persona_selfie_chain(persona_name)
-        ):
+        # 人设参考图张数（不含随后追加的衣橱图/部位素材/用户附图）。
+        # ark_seedream 只吃第一张——该约束改由链路按本次实际命中的 provider
+        # 逐次裁剪（见下方 prepare_images 回调），避免误伤非 ark 后端。
+        persona_ref_count = len(ref_paths)
+        if persona_ref_count > 1:
             logger.debug(
-                "[selfie] 人格 %s ark_seedream 仅保留人设参考图 #1（原 %d 张）",
+                "[selfie] 人格 %s 配置了 %d 张人设参考图，是否裁剪交由本次命中的 provider 决定",
                 persona_name,
-                len(ref_paths),
+                persona_ref_count,
             )
-            ref_paths = ref_paths[:1]
 
         selfie_conf = self._get_feature("selfie")
         wardrobe_ref_added = False
@@ -3694,7 +3770,7 @@ class GiteeAIImagePlugin(Star):
                 f"人格「{persona_name}」未设置自拍参考照。请先：发送图片 + /自拍参考 设置，或在 WebUI 的 features.selfie_personas 中配置该人格。"
             )
 
-        chain_override = self._get_persona_selfie_chain(persona_name)
+        chain_override = self._persona_selfie_chain_effective(persona_name)
         if not chain_override:
             raise RuntimeError(
                 f"人格「{persona_name}」未配置自拍服务商链路。请在 WebUI 的 features.selfie_personas 中为该人格添加 chain。"
@@ -3708,6 +3784,21 @@ class GiteeAIImagePlugin(Star):
         extra_segs = await get_images_from_event(event, include_avatar=False)
         extra_bytes = await self._image_segs_to_bytes(extra_segs)
         images = [*ref_images, *extra_bytes]
+
+        def _prepare_images(pid: str) -> list[bytes]:
+            """按本次实际命中的 provider 决定要发的参考图。
+
+            ark_seedream 只接受第一张人设图（衣橱图/部位素材/用户附图照常保留），
+            其余后端拿到完整人设图列表——两边的待遇互不连坐。
+            """
+            if persona_ref_count > 1 and self._is_ark_seedream_provider(pid):
+                logger.debug(
+                    "[selfie] ark_seedream(%s) 仅保留人设参考图 #1（原 %d 张）",
+                    pid,
+                    persona_ref_count,
+                )
+                return trim_persona_refs(images, persona_ref_count)
+            return images
 
         final_prompt = self._build_selfie_prompt(prompt, extra_refs=len(extra_bytes) + (1 if wardrobe_ref_added else 0) + (1 if asset_ref_added else 0), prompt_prefix=prompt_prefix)
 
@@ -3737,6 +3828,7 @@ class GiteeAIImagePlugin(Star):
             resolution=resolution,
             default_output=persona_default_output,
             chain_override=chain_override,
+            prepare_images=_prepare_images,
         )
         used_pid = self.edit.last_success_provider
         return image_path, used_pid, wardrobe_ref_user_tags
