@@ -3707,7 +3707,7 @@ class GiteeAIImagePlugin(Star):
         """自拍/补拍有衣橱参考图或用户图时，按后端类型决定分辨率覆盖。
 
         - 全部 openai_full_url_images → "4K"
-        - 全部 ark_seedream → "1K"
+        - 全部 ark_seedream → "1.5K"（该系后端只支持 1.5K；出图比例由提示词里的「宽高比为X」决定）
         - 混合或含其他后端 → None（不覆盖，用各自默认尺寸）
         """
         pids = self._collect_selfie_pids(backend, chain_override)
@@ -3725,7 +3725,7 @@ class GiteeAIImagePlugin(Star):
         if template_keys == {"openai_full_url_images"}:
             return "4K"
         if template_keys == {"ark_seedream"}:
-            return "1K"
+            return "1.5K"
         return None
 
     async def _generate_selfie_image(
