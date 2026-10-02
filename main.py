@@ -1704,6 +1704,12 @@ class GiteeAIImagePlugin(Star):
         【适用范围】本工具生成新图片（自拍 / 文生图 / 改图），不接触图库里已有的照片。
         按动词判断走哪个工具：用户说“拍一张/画一张/生成一张”，要的是新产出的图，用本工具；说“发一张/找一张/之前那张再看看”，要的是图库里已有的那张，用 search_wardrobe_image。要视频用 aiimg_video。
 
+        【参考图编号规则】自拍模式下参考图按以下顺序排列，提示词中的「参考图N」必须与之一致：
+        1. 人设参考图占 图1…图N（N = 该人格实际配置的人设参考照张数；**若本次链路走 ark_seedream 后端，人设图只注入第一张，即 N=1**）
+        2. 衣橱图（若使用）、部位素材图（若注入）、用户附图（若用户自己发了图）依次追加在人设图之后
+        3. 每张额外参考图的确切序号，以 aiimg_wardrobe_preview / aiimg_asset_preview 返回文本中的「这张参考图的序号为X」为准
+        ⚠️ 技能文档（skill）里写死的固定张数、固定编号都可能与本次实际不符（走 ark_seedream 后端时人设图只注入 1 张），一律以本工具与预览工具返回的实际序号为准。
+
         使用建议：
         - 用户发送/引用了图片，并要求"改图/换背景/换风格/修图/换衣服"等：用 mode=edit（或 mode=auto）
         - 最高频：用户要求"bot 自拍/来一张你自己的自拍"，且已设置自拍参考照：用 mode=selfie_ref（或 mode=auto）
@@ -2074,6 +2080,7 @@ class GiteeAIImagePlugin(Star):
                 f"调用对应的自拍skill构建提示词，然后调用 aiimg_generate(mode=selfie_ref)。"
                 f"这张参考图的序号为{wardrobe_ref_index}，默认会作为额外参考图传入。"
                 f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
+                f"⚠️ 人设图张数会随人格配置与后端变化（ark_seedream 后端只注入第一张），一律以本次返回的序号为准，禁止套用技能文档里写死的固定编号。"
             )
         else:
             result_text = (
@@ -2082,6 +2089,7 @@ class GiteeAIImagePlugin(Star):
                 f"请根据以上描述构建自拍提示词，如果未调用对应的自拍skill那么现在立刻调用（已经调用则可忽略）。然后调用 aiimg_generate(mode=selfie_ref)。"
                 f"这张参考图的序号为{wardrobe_ref_index}，会自动作为额外参考图传入。"
                 f"前{persona_ref_count}张参考图是你的人设图，要使用这张新的参考图，请在提示词中使用参考图{wardrobe_ref_index}来引用该参考图"
+                f"⚠️ 人设图张数会随人格配置与后端变化（ark_seedream 后端只注入第一张），一律以本次返回的序号为准，禁止套用技能文档里写死的固定编号。"
             )
 
         if preview_to_llm:
@@ -2208,6 +2216,7 @@ class GiteeAIImagePlugin(Star):
             f"前{persona_ref_count}张参考图是人设图。构建提示词时，请根据你最终为 aiimg_generate 传入的衣橱参数选择对应的参考图序号，"
             f"并精准引用该素材的细节（如参考图对应序号所示部位），图里已精确呈现的不重复描述。"
             f"然后调用对应的自拍skill构建提示词，调用 aiimg_generate(mode=selfie_ref, use_asset=true, asset_id={asset_id})。"
+            f"⚠️ 人设图张数会随人格配置与后端变化（ark_seedream 后端只注入第一张），一律以本次返回的序号为准，禁止套用技能文档里写死的固定编号。"
         )
 
         try:
