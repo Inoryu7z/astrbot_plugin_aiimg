@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,9 @@ def _is_http_url(value: Any) -> bool:
     return s.startswith("http://") or s.startswith("https://")
 
 
+# /auto 首选覆盖的落盘文件（插件 data 目录下）
+_ROUTE_OVERRIDE_FILE = "auto_route_override.json"
+
 _TEMPLATE_KEY_ALIASES: dict[str, str] = {
     "gitee": "gitee_images",
     "grok2api_video": "grok2api_video",
@@ -74,10 +78,12 @@ class ProviderRegistry:
         self._backends: dict[str, object] = {}
         self._video_backends: dict[str, object] = {}
 
-        # auto 链路的临时首选 provider（内存态，重启即失效；空串=未设置）
+        # auto 链路的首选 provider 覆盖（落盘持久化；空串=未设置）
         self._route_override: str = ""
+        self._route_override_path = self._data_dir / _ROUTE_OVERRIDE_FILE
 
         self._load_providers()
+        self._load_route_override()
 
     @classmethod
     def _normalize_template_key(cls, raw: Any) -> str:
@@ -362,11 +368,48 @@ class ProviderRegistry:
         return errors
 
     def set_route_override(self, provider_id: str) -> None:
-        """设置 auto 链路的临时首选 provider；传空串即清除。
+        """设置 auto 链路的首选 provider；传空串即清除。落盘持久化，重启后仍然生效。"""
+        pid = str(provider_id or "").strip()
+        self._route_override = pid
+        self._save_route_override(pid)
 
-        仅内存态：不写配置、不落盘，AstrBot 重启后自动恢复原链路顺序。
-        """
-        self._route_override = str(provider_id or "").strip()
+    def _load_route_override(self) -> None:
+        """启动时恢复 /auto 首选。文件缺失、损坏或 provider 已不存在时静默忽略。"""
+        try:
+            data = json.loads(self._route_override_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            logger.warning("[ProviderRegistry] 读取 /auto 首选失败，按未设置处理: %s", e)
+            return
+        pid = ""
+        if isinstance(data, dict):
+            pid = str(data.get("provider_id") or "").strip()
+        if not pid:
+            return
+        if pid not in self._providers:
+            logger.warning(
+                "[ProviderRegistry] /auto 持久化的 provider 已不存在，忽略并清除: %s", pid
+            )
+            self._save_route_override("")
+            return
+        self._route_override = pid
+        logger.info("[ProviderRegistry] /auto 首选已从持久化恢复: %s", pid)
+
+    def _save_route_override(self, provider_id: str) -> None:
+        """原子写入 /auto 首选；任何失败只记日志，不影响命令执行。"""
+        try:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._route_override_path.with_name(
+                self._route_override_path.name + ".tmp"
+            )
+            tmp.write_text(
+                json.dumps({"provider_id": provider_id}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp.replace(self._route_override_path)
+        except Exception as e:
+            logger.warning("[ProviderRegistry] 保存 /auto 首选失败: %s", e)
 
     def get_route_override(self) -> str:
         return self._route_override

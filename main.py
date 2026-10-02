@@ -1620,7 +1620,7 @@ class GiteeAIImagePlugin(Star):
 
     @filter.command("auto")
     async def switch_auto_backend(self, event: AstrMessageEvent, target: str = ""):
-        """临时切换自拍链路的首选服务商（只管自拍，文生图/改图不受影响）；链上恰好两个后端时，无参数即在这两个之间轮切。仅本次运行有效。"""
+        """切换自拍链路的首选服务商（只管自拍，文生图/改图不受影响）；链上恰好两个后端时，无参数即在这两个之间轮切。立即持久化，重启后仍然生效。"""
         arg = (target or "").strip()
         labels = self.registry.provider_labels(kind="image")
         image_ids = [
@@ -1663,7 +1663,7 @@ class GiteeAIImagePlugin(Star):
             else:
                 msg += "当前: 未设置（按配置的链路顺序）\n"
             msg += "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
-            msg += "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复\n"
+            msg += "💾 已持久化，重启后仍然生效\n"
             msg += "━━━━━━━━━━━━━━\n"
             if image_ids:
                 msg += "可用服务商:\n"
@@ -1693,7 +1693,7 @@ class GiteeAIImagePlugin(Star):
         yield event.plain_result(
             f"✅ auto 临时首选已切换为 {_fmt(pid)}\n"
             "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
-            "⚠️ 仅本次运行有效，AstrBot 重启后自动恢复；/auto off 立即恢复"
+            "💾 已持久化，重启后仍然生效；/auto off 立即恢复"
         )
 
     # ==================== LLM 工具 ====================
