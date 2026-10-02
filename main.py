@@ -1595,16 +1595,9 @@ class GiteeAIImagePlugin(Star):
         yield event.plain_result(msg)
 
     @staticmethod
-    def _decide_auto_toggle(chain_pids: list[str], current: str) -> str:
-        """链上恰好两个后端时，轮切后的 override 值（空串=恢复默认顺序）。
-
-        - 未设置 override → 用第二个后端当首选（变成 2 → 1）
-        - 已处于轮切态 → 清空，回到默认顺序（1 → 2）
-        """
-        default_lead, fallback = chain_pids[0], chain_pids[1]
-        if current and current != default_lead:
-            return ""
-        return fallback
+    def _decide_auto_skip(skip_on: bool) -> bool:
+        """无参数 /auto 的开关结果：开着就关，关着就开。"""
+        return not skip_on
 
     async def _selfie_chain_pids(self, event: AstrMessageEvent) -> list[str]:
         """/auto 的作用域＝当前人格的自拍链（其他链路一概不管），按顺序去重。"""
@@ -1620,7 +1613,11 @@ class GiteeAIImagePlugin(Star):
 
     @filter.command("auto")
     async def switch_auto_backend(self, event: AstrMessageEvent, target: str = ""):
-        """切换自拍链路的首选服务商（只管自拍，文生图/改图不受影响）；链上恰好两个后端时，无参数即在这两个之间轮切。立即持久化，重启后仍然生效。"""
+        """切换自拍链路的 auto 顺序（只管自拍，文生图/改图不受影响）。
+
+        无参数＝开关「跳过首选」：开启后链路变成「第二个 → … → 最后一个 → 原来第一个」，
+        原来的首选落到最后当兜底；再执行一次恢复原顺序。立即持久化，重启后仍然生效。
+        """
         arg = (target or "").strip()
         labels = self.registry.provider_labels(kind="image")
         image_ids = [
@@ -1629,10 +1626,14 @@ class GiteeAIImagePlugin(Star):
             if str((self.registry.get(pid) or {}).get("kind") or "").strip() == "image"
         ]
         current = self.registry.get_route_override()
+        skip_on = self.registry.get_route_skip_lead()
 
         def _fmt(pid: str) -> str:
             label = labels.get(pid, "")
             return f"{pid}（{label}）" if label else pid
+
+        def _order_line(pids: list[str]) -> str:
+            return " → ".join(_fmt(p) for p in pids)
 
         if not arg:
             chain_pids = await self._selfie_chain_pids(event)
@@ -1642,26 +1643,39 @@ class GiteeAIImagePlugin(Star):
                     "/auto 只作用于自拍链路（文生图、改图不受影响）。"
                 )
                 return
-            if len(chain_pids) == 2:
-                default_lead, fallback = chain_pids[0], chain_pids[1]
-                next_override = self._decide_auto_toggle(chain_pids, current)
-                self.registry.set_route_override(next_override)
-                if next_override:
-                    yield event.plain_result(
-                        f"🔁 已轮切: {_fmt(default_lead)} → {_fmt(fallback)}"
-                    )
-                else:
-                    yield event.plain_result(
-                        f"🔁 已切回默认顺序: {_fmt(default_lead)} → {_fmt(fallback)}"
-                    )
+            if len(chain_pids) < 2:
+                yield event.plain_result(
+                    f"⚠️ 自拍链上只有 {_fmt(chain_pids[0])} 一个服务商，没有可跳过的下一个。"
+                )
                 return
 
-            msg = "🎯 auto 链路临时首选\n"
-            msg += "━━━━━━━━━━━━━━\n"
-            if current:
-                msg += f"当前: {_fmt(current)}\n"
+            next_skip = self._decide_auto_skip(skip_on)
+            self.registry.set_route_skip_lead(next_skip)
+            if next_skip:
+                order = chain_pids[1:] + chain_pids[:1]
+                yield event.plain_result(
+                    f"🔁 已跳过首选，链路顺序: {_order_line(order)}\n"
+                    f"（{_fmt(chain_pids[0])} 落到最后兜底；再执行 /auto 恢复原顺序）"
+                )
             else:
-                msg += "当前: 未设置（按配置的链路顺序）\n"
+                yield event.plain_result(
+                    f"🔁 已恢复原顺序: {_order_line(chain_pids)}"
+                )
+            return
+
+        if arg.lower() in {"list", "状态", "列表"}:
+            chain_pids = await self._selfie_chain_pids(event)
+            msg = "🎯 auto 自拍链路\n"
+            msg += "━━━━━━━━━━━━━━\n"
+            if len(chain_pids) > 1:
+                order = chain_pids[1:] + chain_pids[:1] if skip_on else chain_pids
+                state = "已跳过首选" if skip_on else ("已指定首选" if current else "默认顺序")
+                msg += f"当前: {state}\n"
+                msg += f"链路: {_order_line(order)}\n"
+            elif chain_pids:
+                msg += f"当前: 链上只有一个服务商 {_fmt(chain_pids[0])}\n"
+            else:
+                msg += "当前: 未绑定人格或未配置自拍链路\n"
             msg += "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
             msg += "💾 已持久化，重启后仍然生效\n"
             msg += "━━━━━━━━━━━━━━\n"
@@ -1672,28 +1686,31 @@ class GiteeAIImagePlugin(Star):
             else:
                 msg += "⚠️ 未找到图片类服务商\n"
             msg += "━━━━━━━━━━━━━━\n"
-            msg += "用法: /auto <服务商ID或显示名> | /auto off"
+            msg += "用法: /auto 开关跳过首选 | /auto <服务商ID或显示名> 指定首选 | /auto off 恢复"
             yield event.plain_result(msg)
             return
 
         if arg.lower() in {"off", "auto", "default", "默认", "恢复", "清除", "关"}:
+            self.registry.set_route_skip_lead(False)
             self.registry.set_route_override("")
-            yield event.plain_result("✅ 已清除 auto 临时首选，恢复按配置的链路顺序")
+            chain_pids = await self._selfie_chain_pids(event)
+            tail = f"\n默认顺序: {_order_line(chain_pids)}" if len(chain_pids) > 1 else ""
+            yield event.plain_result("✅ 已恢复配置里的链路顺序" + tail)
             return
 
         pid = self.registry.resolve_backend(arg, kind="image")
         if not pid:
             yield event.plain_result(
                 f"❌ 未找到图片类服务商「{arg}」\n"
-                "用 /auto 查看可用服务商（显示名或 provider_id 均可）"
+                "用 /auto list 查看可用服务商（显示名或 provider_id 均可）"
             )
             return
 
         self.registry.set_route_override(pid)
         yield event.plain_result(
-            f"✅ auto 临时首选已切换为 {_fmt(pid)}\n"
+            f"✅ 已把 {_fmt(pid)} 设为自拍链首选（其余顺序不变）\n"
             "生效范围: 仅自拍链路（文生图、改图、视频、补拍一概不受影响）\n"
-            "💾 已持久化，重启后仍然生效；/auto off 立即恢复"
+            "💾 已持久化，重启后仍然生效；/auto off 恢复"
         )
 
     # ==================== LLM 工具 ====================

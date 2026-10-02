@@ -78,8 +78,9 @@ class ProviderRegistry:
         self._backends: dict[str, object] = {}
         self._video_backends: dict[str, object] = {}
 
-        # auto 链路的首选 provider 覆盖（落盘持久化；空串=未设置）
+        # auto 链路覆盖（落盘持久化）：显式首选 pid，或「跳过链首」开关，两者互斥
         self._route_override: str = ""
+        self._route_skip_lead: bool = False
         self._route_override_path = self._data_dir / _ROUTE_OVERRIDE_FILE
 
         self._load_providers()
@@ -368,69 +369,103 @@ class ProviderRegistry:
         return errors
 
     def set_route_override(self, provider_id: str) -> None:
-        """设置 auto 链路的首选 provider；传空串即清除。落盘持久化，重启后仍然生效。"""
+        """显式指定 auto 链路的首选 provider（提到链首）；传空串即清除。
+
+        与「跳过链首」互斥：设置首选会关掉跳过开关。
+        """
         pid = str(provider_id or "").strip()
         self._route_override = pid
-        self._save_route_override(pid)
+        if pid:
+            self._route_skip_lead = False
+        self._save_route_override()
+
+    def set_route_skip_lead(self, on: bool) -> None:
+        """开关「跳过链首」：开启后链路变成「第二个 → … → 最后一个 → 原来第一个」。
+
+        与显式首选互斥：开启时清掉首选 pid。
+        """
+        self._route_skip_lead = bool(on)
+        if self._route_skip_lead:
+            self._route_override = ""
+        self._save_route_override()
+
+    def get_route_skip_lead(self) -> bool:
+        return self._route_skip_lead
 
     def _load_route_override(self) -> None:
-        """启动时恢复 /auto 首选。文件缺失、损坏或 provider 已不存在时静默忽略。"""
+        """启动时恢复 /auto 状态。文件缺失、损坏或 provider 已不存在时静默忽略。"""
         try:
             data = json.loads(self._route_override_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return
         except Exception as e:
-            logger.warning("[ProviderRegistry] 读取 /auto 首选失败，按未设置处理: %s", e)
+            logger.warning("[ProviderRegistry] 读取 /auto 状态失败，按未设置处理: %s", e)
             return
-        pid = ""
-        if isinstance(data, dict):
-            pid = str(data.get("provider_id") or "").strip()
-        if not pid:
+        if not isinstance(data, dict):
             return
-        if pid not in self._providers:
+        pid = str(data.get("provider_id") or "").strip()
+        skip = bool(data.get("skip_lead"))
+        if pid and pid not in self._providers:
             logger.warning(
                 "[ProviderRegistry] /auto 持久化的 provider 已不存在，忽略并清除: %s", pid
             )
-            self._save_route_override("")
+            pid = ""
+            self._route_override = ""
+            self._route_skip_lead = skip
+            self._save_route_override()
             return
         self._route_override = pid
-        logger.info("[ProviderRegistry] /auto 首选已从持久化恢复: %s", pid)
+        self._route_skip_lead = skip and not pid
+        if self._route_override or self._route_skip_lead:
+            logger.info(
+                "[ProviderRegistry] /auto 状态已从持久化恢复: 首选=%s 跳过链首=%s",
+                self._route_override or "-",
+                self._route_skip_lead,
+            )
 
-    def _save_route_override(self, provider_id: str) -> None:
-        """原子写入 /auto 首选；任何失败只记日志，不影响命令执行。"""
+    def _save_route_override(self) -> None:
+        """原子写入 /auto 状态；任何失败只记日志，不影响命令执行。"""
         try:
             self._data_dir.mkdir(parents=True, exist_ok=True)
             tmp = self._route_override_path.with_name(
                 self._route_override_path.name + ".tmp"
             )
             tmp.write_text(
-                json.dumps({"provider_id": provider_id}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "provider_id": self._route_override,
+                        "skip_lead": self._route_skip_lead,
+                    },
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
             tmp.replace(self._route_override_path)
         except Exception as e:
-            logger.warning("[ProviderRegistry] 保存 /auto 首选失败: %s", e)
+            logger.warning("[ProviderRegistry] 保存 /auto 状态失败: %s", e)
 
     def get_route_override(self) -> str:
         return self._route_override
 
     def apply_route_override(self, chain: list | None) -> list | None:
-        """把临时首选 provider 提到链首，其余项顺序不变（兜底保留）。
+        """按 /auto 状态重排链路。
 
-        - 未设置 override → 原样返回
-        - override 已在链上 → 只提到首位，不重复插入
-        - 幂等：连续应用两次结果一致
+        - 显式首选：把该 provider 提到链首，其余顺序不变
+        - 跳过链首：整体前移一位，原来的第一个落到最后当兜底（A→B→C 变 B→C→A）
+        - 两者都没设置，或链上不足两个：原样返回
         """
-        ov = (self._route_override or "").strip()
-        if not ov:
-            return chain
         base = chain if isinstance(chain, list) else []
-        rest = [
-            item
-            for item in base
-            if (parse_chain_item(item) or ("", ""))[0] != ov
-        ]
-        return [{"provider_id": ov}] + rest
+        ov = (self._route_override or "").strip()
+        if ov:
+            rest = [
+                item
+                for item in base
+                if (parse_chain_item(item) or ("", ""))[0] != ov
+            ]
+            return [{"provider_id": ov}] + rest
+        if self._route_skip_lead and len(base) > 1:
+            return base[1:] + base[:1]
+        return chain
 
     def provider_ids(self) -> list[str]:
         return list(self._providers.keys())
