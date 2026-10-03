@@ -14,6 +14,7 @@ import httpx
 from astrbot.api import logger
 
 from .gitee_sizes import normalize_size_text
+from .output_spec import extract_prompt_ratio, resolve_size_from_ratio
 from .image_format import guess_image_mime_and_ext
 from .openai_compat_backend import _build_collage, resolution_to_size
 
@@ -179,13 +180,34 @@ class OpenAIFullURLBackend:
                 return False
         return default
 
-    def _resolve_size(self, size: str | None, resolution: str | None) -> str:
-        final_size = normalize_size_text(size)
-        if not final_size:
-            final_size = normalize_size_text(resolution_to_size(str(resolution or "")))
-        if not final_size:
-            final_size = self.default_size
-        return final_size
+    def _resolve_size(
+        self, size: str | None, resolution: str | None, prompt: str = ""
+    ) -> str:
+        """决定最终 size。
+
+        优先级：显式 size → resolution → provider 默认尺寸。
+        再加一层兜底：若最终值是「档位」（如 4k / 1.5k）且提示词里写了「宽高比为X」，
+        就换算成该档位下对应比例的像素尺寸，免得提供商不按提示词的比例出图。
+        换算不成立（档位不在表里、提示词里没有宽高比）时保持原值，交给提供商处理。
+        """
+        raw_size = normalize_size_text(size)
+        raw_res = normalize_size_text(resolution)
+        tier = raw_size or raw_res or self.default_size
+        pixel = resolve_size_from_ratio(prompt, tier)
+        if pixel:
+            logger.debug(
+                "[OpenAIFullURL] 按提示词宽高比换算尺寸: %s + %s → %s",
+                tier,
+                extract_prompt_ratio(prompt),
+                pixel,
+            )
+            return pixel
+        if raw_size:
+            return raw_size
+        converted = normalize_size_text(resolution_to_size(str(resolution or "")))
+        if converted:
+            return converted
+        return self.default_size
 
     @staticmethod
     def _collect_local_options(*sources: dict | None) -> dict[str, Any]:
@@ -360,7 +382,7 @@ class OpenAIFullURLBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size = self._resolve_size(size, resolution)
+        final_size = self._resolve_size(size, resolution, prompt)
         payload: dict[str, Any] = {
             "model": final_model,
             "prompt": (prompt or "").strip() or "a high quality image",
@@ -399,7 +421,7 @@ class OpenAIFullURLBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size = self._resolve_size(size, resolution)
+        final_size = self._resolve_size(size, resolution, prompt)
         local_opts = self._collect_local_options(self.extra_body, extra_body)
         edit_mode = str(local_opts.get("__edit_mode") or "auto").strip().lower()
         if not edit_mode or edit_mode == "auto":
