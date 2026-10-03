@@ -37,7 +37,7 @@ BATCH_STAGGER_SECONDS = 30
 # 用于在日志里确认进程加载的代码版本——「改了但不生效」多半是 AstrBot 进程
 # 未重启/重载，日志里看不到对应版本标记即为铁证。
 # ⚠️ 纪律：改动补拍核心行为（r0/r1/搜图/r4 场景策略）时必须同步更新此常量。
-_SELFIE_BEHAVIOR_VERSION = "v2.1.3"
+_SELFIE_BEHAVIOR_VERSION = "v2.1.6"
 
 
 def _clean_llm_line(line: str) -> str:
@@ -1441,7 +1441,7 @@ class DailySelfieService:
         # 生效性探针：日志里出现此行即证明进程加载的是当前版本代码；
         # 若补拍运行时日志里找不到该标记，说明 AstrBot 进程未重启/重载旧代码
         logger.info(
-            "[DailySelfie][%s] 风格=%s | cosplay=%d条(不进r1/直取/不改场景) | 非cos场景非空=%d/%d | 搜图=串行",
+            "[DailySelfie][%s] 风格=%s | cosplay=%d条(不进r1/直取/不改场景) | 非cos场景非空=%d/%d | 搜图=串行+非cos排除cos图",
             _SELFIE_BEHAVIOR_VERSION,
             ",".join(styles) or "无",
             sum(1 for s in styles if s == "cosplay"),
@@ -1475,9 +1475,14 @@ class DailySelfieService:
         if any(s == "cosplay" for s in styles):
             per_query_direct_style = ["cosplay" if s == "cosplay" else "" for s in styles]
 
+        # 非 cosplay 条目在召回阶段排除 cos 图（无条件，即使本批没有 cosplay 条目）：
+        # cos 图只准被 cosplay 条目全保留使用，被非 cosplay 条目以 reimagine 身份
+        # 改场景出图就是「cos 图被改场景」的根源
+        per_query_exclude_style = ["" if s == "cosplay" else "cosplay" for s in styles]
+
         # 搜图对所有后端一视同仁（ark_seedream 也不例外）：
         # ark 的唯一区别是生图时人设图只保留第一张，衣橱图照常注入
-        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim, per_query_direct_style=per_query_direct_style)
+        ref_results = await self._search_reference_images(search_queries, wardrobe, persona_name, min_similarity=daily_ref_min_sim, per_query_min_similarity=per_query_sim, per_query_direct_style=per_query_direct_style, per_query_exclude_style=per_query_exclude_style)
 
         # 任何风格无参考图 → 排除当前风格和近期风格，换一个风格重搜1次
         # 解决单图风格（如护士服）今日已用时搜不到图的问题
@@ -1494,8 +1499,10 @@ class DailySelfieService:
                     new_query = f"{new_style} {scenes[i]}"
                     # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
                     retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
-                    # 换到 cosplay 的重搜同样免向量召回，与主搜图口径一致
+                    # 换到 cosplay 的重搜同样免向量召回，与主搜图口径一致；
+                    # 换到的若是非 cosplay 风格，重搜同样排除 cos 图
                     retry_direct = ["cosplay"] if new_style == "cosplay" else None
+                    retry_exclude = None if new_style == "cosplay" else ["cosplay"]
                     logger.debug(
                         "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
                         persona_name, styles[i], new_style,
@@ -1503,6 +1510,7 @@ class DailySelfieService:
                     retry_ref = await self._search_reference_images(
                         [new_query], wardrobe, persona_name, min_similarity=retry_sim,
                         per_query_direct_style=retry_direct,
+                        per_query_exclude_style=retry_exclude,
                     )
                     styles[i] = new_style
                     if retry_ref and retry_ref[0] is not None:
@@ -3081,25 +3089,30 @@ class DailySelfieService:
         min_similarity: float | None = None,
         per_query_min_similarity: list[float | None] | None = None,
         per_query_direct_style: list[str] | None = None,
+        per_query_exclude_style: list[str] | None = None,
     ) -> list[dict]:
         """补拍搜图。
 
         per_query_direct_style：与 queries 对齐的风格直取标记。cosplay 条目传 "cosplay"，
         wardrobe 侧将跳过向量召回、直接从该风格图池按冷梯队取图（cos 场景由参考图决定，
         r1 场景与 query 均不得影响选图）；空串条目走原有向量召回路径。
+
+        per_query_exclude_style：与 queries 对齐的风格排除标记。非 cosplay 条目传
+        "cosplay"，wardrobe 侧在召回候选中剔除 cosplay 风格图——cos 图只准被
+        cosplay 条目全保留使用，绝不允许被非 cosplay 条目以 reimagine 身份改场景。
         """
         used_ids: set[str] = set()
         results: list[dict | None] = [None] * len(queries)
 
-        # 旧版衣橱的 get_reference_image 不认识 direct_style：先检测签名，
-        # 不支持时干脆不传参（退回向量召回路径），而不是吞 TypeError 后
-        # 让 cosplay 条目全部落入「无参考图换风格」兜底
+        # 旧版衣橱的 get_reference_image 不认识新参数：先检测签名，
+        # 不支持时干脆不传参（退回旧行为），而不是吞 TypeError 后
+        # 让对应条目全部落入「无参考图换风格」兜底
         try:
-            supports_direct_style = (
-                "direct_style" in inspect.signature(wardrobe.get_reference_image).parameters
-            )
+            _sig_params = inspect.signature(wardrobe.get_reference_image).parameters
         except (TypeError, ValueError):
-            supports_direct_style = False
+            _sig_params = {}
+        supports_direct_style = "direct_style" in _sig_params
+        supports_exclude_style = "exclude_style_keywords" in _sig_params
 
         async def _search_one(idx: int, query: str) -> None:
             try:
@@ -3118,6 +3131,12 @@ class DailySelfieService:
                         if per_query_direct_style and idx < len(per_query_direct_style):
                             direct_style = str(per_query_direct_style[idx] or "")
                         kwargs["direct_style"] = direct_style
+                    if supports_exclude_style:
+                        exclude_kw = ""
+                        if per_query_exclude_style and idx < len(per_query_exclude_style):
+                            exclude_kw = str(per_query_exclude_style[idx] or "")
+                        if exclude_kw:
+                            kwargs["exclude_style_keywords"] = (exclude_kw,)
                     ref = await wardrobe.get_reference_image(**kwargs)
                     if ref:
                         img_id = str(ref.get("image_id", ""))
