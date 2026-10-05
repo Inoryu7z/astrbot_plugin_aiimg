@@ -63,7 +63,10 @@ class VercelSeedreamBackend(OpenAIFullURLBackend):
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size = self._resolve_size(size, resolution)
+        # 必须把 prompt 传给 _resolve_size：父类的兜底换算依赖提示词末尾的
+        # 「宽高比为X」（如 4K 档 + 9:16 → 3040x5504）；丢 prompt 会导致
+        # 档位被 resolution_to_size 固定成正方形（4K → 4096x4096）
+        final_size = self._resolve_size(size, resolution, prompt)
 
         # 参考图全部 base64 data-URI 内联，绝不外传到第三方公网
         refs: list[dict[str, str]] = []
