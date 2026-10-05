@@ -37,7 +37,49 @@ BATCH_STAGGER_SECONDS = 30
 # 用于在日志里确认进程加载的代码版本——「改了但不生效」多半是 AstrBot 进程
 # 未重启/重载，日志里看不到对应版本标记即为铁证。
 # ⚠️ 纪律：改动补拍核心行为（r0/r1/搜图/r4 场景策略）时必须同步更新此常量。
-_SELFIE_BEHAVIOR_VERSION = "v2.1.6"
+_SELFIE_BEHAVIOR_VERSION = "v2.1.7"
+
+# cos 身份判定：子串语义（风格/标签字符串里只要含 "cosplay" 即为 cos）。
+# 与 wardrobe 检索侧（_style_matches 子串口径）及「风格里有 cosplay 的图就是 cos」
+# 的需求口径一致；精确相等判定会被风格池变体写法（如「cosplay风」）绕过，
+# 导致条目以非 cos 身份进 r1、拿场景、走 reimagine——「cos 图被改场景」根源之一。
+_COS_SUBSTRING = "cosplay"
+
+# 铁律产出校验：这些措辞意味着模型在改场景，铁律下出现即为违例
+# （「严格保留参考图N的场景」「禁止任何场景改动」等保留表述不会命中）。
+_COS_SCENE_VIOLATION_RE = re.compile(r"场景(改为|更换|替换|换到|重新设计)|(?:更换|替换|重新设计)场景")
+
+
+def _is_cos_style(value: Any) -> bool:
+    """风格/标签字符串是否含 "cosplay"（子串语义，大小写不敏感）。"""
+    return _COS_SUBSTRING in str(value or "").lower()
+
+
+def _strip_strength_strategy_section(system_prompt: str) -> str:
+    """清洗系统提示词中一切 full/style/reimagine 模式差异与改场景授权文本。
+
+    铁律模式下 user_prompt 已钉死全保留值，但系统提示词里的策略表与各模式
+    默认值仍对模型可见——反例产出正是 reimagine 默认组合（严格匹配声明不含
+    发型、保留维度不含场景/构图），模型可从中抓取「重新设计」依据。清洗三处：
+    1. 「### 参考图力度」→「### 引用式开头」整段（三档保留策略表）；
+    2. 占位符默认值行（「…模式默认**：填」「full/style/reimagine → …」）；
+    3. 「需重新设计，不适用本条」类差量豁免行。
+    保留「cosplay 场景强制」等与铁律同向的行。找不到边界标记时仅做行级清洗。
+    """
+    start = system_prompt.find("### 参考图力度")
+    end = system_prompt.find("### 引用式开头")
+    if start != -1 and end != -1 and end > start:
+        system_prompt = system_prompt[:start] + system_prompt[end:]
+    kept: list[str] = []
+    for line in system_prompt.splitlines(keepends=True):
+        if "模式默认**：填" in line:
+            continue
+        if re.search(r"^\s*-\s*(full|style|reimagine)\s*→", line):
+            continue
+        if "需重新设计，不适用本条" in line:
+            continue
+        kept.append(line)
+    return "".join(kept)
 
 
 def _clean_llm_line(line: str) -> str:
@@ -1416,7 +1458,7 @@ class DailySelfieService:
             logger.warning("[DailySelfie] 人格 %s r0算法选风格未返回结果", persona_name)
             return 0, 0
 
-        non_cos_count = sum(1 for s in styles if s != "cosplay")
+        non_cos_count = sum(1 for s in styles if not _is_cos_style(s))
         if non_cos_count > 0:
             scenes_non_cos = await self._llm_round1_scene(scene_provider_id, non_cos_count)
             if not scenes_non_cos:
@@ -1430,7 +1472,7 @@ class DailySelfieService:
         scenes: list[str] = []
         fill = 0
         for s in styles:
-            if s == "cosplay":
+            if _is_cos_style(s):
                 scenes.append("")
             else:
                 scenes.append(scenes_non_cos[fill] if fill < len(scenes_non_cos) else "")
@@ -1441,10 +1483,10 @@ class DailySelfieService:
         # 生效性探针：日志里出现此行即证明进程加载的是当前版本代码；
         # 若补拍运行时日志里找不到该标记，说明 AstrBot 进程未重启/重载旧代码
         logger.info(
-            "[DailySelfie][%s] 风格=%s | cosplay=%d条(不进r1/直取/不改场景) | 非cos场景非空=%d/%d | 搜图=串行+非cos排除cos图",
+            "[DailySelfie][%s] 风格=%s | cos=%d条(含变体,不进r1/直取cosplay池/不改场景) | 非cos场景非空=%d/%d | 搜图=串行+非cos排除cos图",
             _SELFIE_BEHAVIOR_VERSION,
             ",".join(styles) or "无",
-            sum(1 for s in styles if s == "cosplay"),
+            sum(1 for s in styles if _is_cos_style(s)),
             sum(1 for s in scenes if s),
             non_cos_count,
         )
@@ -1466,19 +1508,21 @@ class DailySelfieService:
         # 注意：传 None 会被 wardrobe.vector_searcher 回退为全局阈值（默认0.5），
         # 必须显式传 0.0 才能真正不过滤
         per_query_sim: list[float | None] | None = None
-        if any(s == "cosplay" for s in styles):
-            per_query_sim = [0.0 if s == "cosplay" else daily_ref_min_sim for s in styles]
+        if any(_is_cos_style(s) for s in styles):
+            per_query_sim = [0.0 if _is_cos_style(s) else daily_ref_min_sim for s in styles]
 
         # cosplay 条目免向量召回：wardrobe 直接从 cosplay 风格图池按冷梯队取图，
         # query / r1 场景与选图彻底无关（cos 场景由参考图决定）
         per_query_direct_style: list[str] | None = None
-        if any(s == "cosplay" for s in styles):
-            per_query_direct_style = ["cosplay" if s == "cosplay" else "" for s in styles]
+        if any(_is_cos_style(s) for s in styles):
+            # cos 条目直取一律写死字面 "cosplay" 池：query 永远只写 cosplay，
+            # 风格名变体（如「cosplay风」）不影响取图池
+            per_query_direct_style = ["cosplay" if _is_cos_style(s) else "" for s in styles]
 
         # 非 cosplay 条目在召回阶段排除 cos 图（无条件，即使本批没有 cosplay 条目）：
         # cos 图只准被 cosplay 条目全保留使用，被非 cosplay 条目以 reimagine 身份
         # 改场景出图就是「cos 图被改场景」的根源
-        per_query_exclude_style = ["" if s == "cosplay" else "cosplay" for s in styles]
+        per_query_exclude_style = ["" if _is_cos_style(s) else "cosplay" for s in styles]
 
         # 搜图对所有后端一视同仁（ark_seedream 也不例外）：
         # ark 的唯一区别是生图时人设图只保留第一张，衣橱图照常注入
@@ -1488,7 +1532,7 @@ class DailySelfieService:
         # 解决单图风格（如护士服）今日已用时搜不到图的问题
         recent_set = set(recent_styles)
         for i in range(pair_count):
-            if ref_results[i] is None and styles[i] != "cosplay":
+            if ref_results[i] is None and not _is_cos_style(styles[i]):
                 # cosplay 条目不走换风格兜底（见 _drop_failed_cos_entries），
                 # 非 cosplay 条目保留原有兜底：换风格重搜 1 次
                 alt_pool = [s for s in style_pool if s != styles[i] and s not in recent_set]
@@ -1497,12 +1541,13 @@ class DailySelfieService:
                 if alt_pool:
                     new_style = random.choice(alt_pool)
                     new_query = f"{new_style} {scenes[i]}"
-                    # 换到 cosplay 时用 0.0 阈值，其他用常规阈值
-                    retry_sim = 0.0 if new_style == "cosplay" else daily_ref_min_sim
-                    # 换到 cosplay 的重搜同样免向量召回，与主搜图口径一致；
+                    # 换到 cos 风格（含变体）时用 0.0 阈值 + 清空残留场景，其他用常规阈值
+                    retry_is_cos = _is_cos_style(new_style)
+                    retry_sim = 0.0 if retry_is_cos else daily_ref_min_sim
+                    # 换到 cos 的重搜同样免向量召回、直取字面 cosplay 池，与主搜图口径一致；
                     # 换到的若是非 cosplay 风格，重搜同样排除 cos 图
-                    retry_direct = ["cosplay"] if new_style == "cosplay" else None
-                    retry_exclude = None if new_style == "cosplay" else ["cosplay"]
+                    retry_direct = ["cosplay"] if retry_is_cos else None
+                    retry_exclude = None if retry_is_cos else ["cosplay"]
                     logger.debug(
                         "[DailySelfie] 人格 %s 无参考图，换风格: %s→%s",
                         persona_name, styles[i], new_style,
@@ -1513,6 +1558,10 @@ class DailySelfieService:
                         per_query_exclude_style=retry_exclude,
                     )
                     styles[i] = new_style
+                    if retry_is_cos:
+                        # 换到 cos 后条目身份是 cos：残留的 r1 场景必须清空，
+                        # 否则下游按非 cos 消费场景串（cos 条目场景一律为空）
+                        scenes[i] = ""
                     if retry_ref and retry_ref[0] is not None:
                         ref_results[i] = retry_ref[0]
 
@@ -2051,7 +2100,7 @@ class DailySelfieService:
             return []
 
         recent_set = set(recent_styles)
-        fresh_pool = [s for s in style_pool if s not in recent_set or s == "cosplay"]
+        fresh_pool = [s for s in style_pool if s not in recent_set or _is_cos_style(s)]
 
         pool = fresh_pool if fresh_pool else style_pool
         picked = self._weighted_choices(pool, count, self._get_cosplay_weight())
@@ -2070,7 +2119,7 @@ class DailySelfieService:
         """从 pool 中加权有放回抽取 k 个元素。cosplay 权重=cosplay_weight，其余=1。"""
         if not pool or k <= 0:
             return []
-        weights = [cosplay_weight if s == "cosplay" else 1 for s in pool]
+        weights = [cosplay_weight if _is_cos_style(s) else 1 for s in pool]
         try:
             return random.choices(pool, weights=weights, k=k)
         except Exception as e:
@@ -2828,12 +2877,17 @@ class DailySelfieService:
         ref_images: list[str] | None = None,
         system_prompt: str = "",
         persona_ref_count: int = 3,
+        ref_is_cos: bool = False,
     ) -> str:
         """有衣橱参考图时，r4 逐条构建提示词。
 
         衣橱图的引用序号 = 人设图张数 + 1，按 persona_ref_count 动态生成——
         人设图由 1 张改为 2 张时序号随之变成参考图3，与系统提示词保持一致。
         有图模式必须带图：拿不到可用图片就放弃该条，不生成没有参考依据的服装描述。
+
+        cos 判定为图片层：条目风格含 "cosplay" 或参考图 style 标签含 "cosplay"
+        （ref_is_cos）即走铁律——「标签只要有 cosplay，不管其他标签是什么，
+        都只能是 cosplay」，场景永远不注入、不改动，与条目怎么选到这张图无关。
         """
         if not ref_images:
             logger.warning(
@@ -2843,8 +2897,9 @@ class DailySelfieService:
             self._record_debug("WARN", "r4有图模式无可用参考图，跳过该条")
             return ""
 
+        is_cos = _is_cos_style(style) or ref_is_cos
         wardrobe_index = persona_ref_count + 1
-        if style == "cosplay":
+        if is_cos:
             scene_line = f"场景：严格保留参考图{wardrobe_index}的场景，禁止任何场景改动\n"
             # cosplay 走独立的铁律 user_prompt，与其他风格彻底隔离：
             # 1) 不传「参考图力度」行、不出现 full/style/reimagine 策略表——
@@ -2884,11 +2939,15 @@ class DailySelfieService:
         effective_prompt = system_prompt or _apply_persona_ref_count(
             _NO_REF_PROMPT_ENGINEER_SYSTEM_PROMPT, persona_ref_count
         )
+        if is_cos:
+            # 铁律模式下剥离系统提示词里的 reimagine 策略段：
+            # 模型不能看到「场景基于给定场景重新设计」的授权文本
+            effective_prompt = _strip_strength_strategy_section(effective_prompt)
         # 生效性探针（debug 级）：cos 条目每次 r4 调用都记录场景行形态，
         # 供排查「场景被改」时确认本条走的是哪种策略
         logger.debug(
-            "[DailySelfie][%s] r4 场景行: style=%s scene入参=%r 场景行=%r",
-            _SELFIE_BEHAVIOR_VERSION, style, scene, scene_line.strip(),
+            "[DailySelfie][%s] r4 场景行: style=%s ref_is_cos=%s 场景行=%r",
+            _SELFIE_BEHAVIOR_VERSION, style, ref_is_cos, scene_line.strip(),
         )
 
         for attempt in range(2):
@@ -2911,6 +2970,17 @@ class DailySelfieService:
                         "[DailySelfie] r4有图提示词返回空(重试%d/2)，带图重试",
                         attempt + 1,
                     )
+                    if attempt == 0:
+                        continue
+                    return ""
+                if is_cos and _COS_SCENE_VIOLATION_RE.search(text):
+                    # 铁律兜底校验：cos 产出里出现「场景改为/更换/替换」等改场景
+                    # 措辞即为违例。重试 1 次，仍违规则返回空串弃条，绝不降级放行
+                    logger.warning(
+                        "[DailySelfie] r4铁律产出含改场景措辞(重试%d/2)，带图重试",
+                        attempt + 1,
+                    )
+                    self._record_debug("WARN", f"r4铁律产出改场景措辞(重试{attempt + 1}/2)")
                     if attempt == 0:
                         continue
                     return ""
@@ -2955,7 +3025,11 @@ class DailySelfieService:
             prompts: list[str] = []
             strengths: list[str] = []
             for i, (style, scene, ref) in enumerate(zip(batch_styles, batch_scenes, batch_refs)):
-                ref_strength = "full" if style == "cosplay" else "reimagine"
+                # 图片层 cos 判定：参考图 style 标签含 "cosplay" 即走铁律，
+                # 与条目风格无关（标签只要有 cosplay 就只能是 cosplay）
+                ref_style = str(ref.get("style", "") or "") if ref else ""
+                ref_is_cos = _is_cos_style(ref_style)
+                ref_strength = "full" if (_is_cos_style(style) or ref_is_cos) else "reimagine"
                 strengths.append(ref_strength)
                 img_path = ref.get("image_path", "")
                 p = Path(img_path) if img_path else None
@@ -2968,6 +3042,7 @@ class DailySelfieService:
                     ref_images=[img_uri] if img_uri else None,
                     system_prompt=prompt_engineer_system_prompt,
                     persona_ref_count=persona_ref_count,
+                    ref_is_cos=ref_is_cos,
                 )
                 prompts.append(prompt)
 
@@ -3073,7 +3148,7 @@ class DailySelfieService:
         kept_refs: list[dict | None] = []
         dropped = 0
         for style, scene, ref in zip(styles, scenes, ref_results):
-            if style == "cosplay" and ref is None:
+            if _is_cos_style(style) and ref is None:
                 dropped += 1
                 continue
             kept_styles.append(style)
