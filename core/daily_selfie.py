@@ -37,7 +37,7 @@ BATCH_STAGGER_SECONDS = 30
 # 用于在日志里确认进程加载的代码版本——「改了但不生效」多半是 AstrBot 进程
 # 未重启/重载，日志里看不到对应版本标记即为铁证。
 # ⚠️ 纪律：改动补拍核心行为（r0/r1/搜图/r4 场景策略）时必须同步更新此常量。
-_SELFIE_BEHAVIOR_VERSION = "v2.1.7"
+_SELFIE_BEHAVIOR_VERSION = "v2.1.8"
 
 # cos 身份判定：子串语义（风格/标签字符串里只要含 "cosplay" 即为 cos）。
 # 与 wardrobe 检索侧（_style_matches 子串口径）及「风格里有 cosplay 的图就是 cos」

@@ -3685,25 +3685,75 @@ class GiteeAIImagePlugin(Star):
             return n
         return 1
 
-    @staticmethod
-    def _shift_ref_index(prompt: str, lead_count: int, actual_count: int) -> str:
-        """按命中后端的人设图张数，平移提示词里的「参考图N」编号。
+    # 「人设图张数」在提示词里的两种写法：带「参考图」的编号（参考图2）与中文/数字的
+    # 「以前N张」「前N张」「不保留前N张」（可带「(人设)?参考图」尾巴）。两者必须联动平移，
+    # 否则链路上档切后端（ark 1 张 ↔ 非 ark N 张）后会出现「以前1张…保留参考图3」的自相矛盾。
+    _REF_INDEX_NUM_RE = re.compile(r"参考图(\s*)(\d+)")
+    _PERSONA_COUNT_RE = re.compile(
+        r"(?P<prefix>以前|不保留前|前)(?P<num>[一二两三四五六七八九十\d]+)(?P<suffix>张)"
+    )
+    _CN_NUM = {"一": 1, "两": 2, "三": 3, "四": 4, "五": 5,
+               "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    _CN_NUM_REV = {v: k for k, v in _CN_NUM.items()}
 
-        只平移编号 > lead_count 的（人设图之外的额外参考图：衣橱图/部位素材/用户图）；
-        人设图自身编号（≤ lead_count）以及「第1张参考图」这类不带编号的表述原样保留。
+    @classmethod
+    def _parse_cn_or_arabic(cls, token: str) -> int | None:
+        """把「一/两/三…/1/2/3」解析成整数，无法解析返回 None。"""
+        t = str(token or "").strip()
+        if not t:
+            return None
+        if t.isdigit():
+            return int(t)
+        return cls._CN_NUM.get(t)
+
+    @classmethod
+    def _render_count(cls, n: int, *, as_cn: bool) -> str:
+        """按原文风格还原张数：原文是中文数字就用中文（≤10 支持），否则用阿拉伯数字。"""
+        if as_cn:
+            return cls._CN_NUM_REV.get(n, str(n))
+        return str(n)
+
+    @classmethod
+    def _shift_ref_index(cls, prompt: str, lead_count: int, actual_count: int) -> str:
+        """按命中后端的人设图张数，平移提示词里所有「人设图张数」相关的表述。
+
+        需要联动平移的两类写法（构建时按 lead_count 写，实际发出 actual_count 张）：
+        1. 带「参考图」的编号 —— 编号 > lead_count 的是人设图之外的额外参考图
+           （衣橱图/部位素材/用户图），必须整体 +delta；编号 ≤ lead_count 的人设图
+           自身编号（含「第1张参考图」这类不带编号的表述）原样保留。
+        2. 「以前N张」「不保留前N张」「前N张」（可带「(人设)?参考图」尾巴）—— 这里的 N
+           就是人设图张数，必须整体改成 actual_count。仅当原值 == lead_count 时才改，
+           避免误伤用户提示词里恰好同值的其它数字。
+
         lead_count = 构建提示词时按链首算的张数，actual_count = 本次实际命中后端的张数。
+        delta == 0 时原样返回；两类替换互不重叠（后者不含「参考图+数字」形态）。
         """
         delta = actual_count - lead_count
         if not prompt or delta == 0:
             return prompt
 
-        def _sub(m: re.Match) -> str:
+        # 第一类：参考图N 编号平移
+        def _sub_num(m: re.Match) -> str:
             idx = int(m.group(2))
             if idx <= lead_count:
                 return m.group(0)
             return f"参考图{m.group(1)}{idx + delta}"
 
-        return re.sub(r"参考图(\s*)(\d+)", _sub, prompt)
+        text = cls._REF_INDEX_NUM_RE.sub(_sub_num, prompt)
+
+        # 第二类：「以前/不保留前/前 + N + 张」里的 N（人设图张数）
+        def _sub_count(m: re.Match) -> str:
+            token = m.group("num")
+            val = cls._parse_cn_or_arabic(token)
+            if val is None or val != lead_count:
+                return m.group(0)
+            return (
+                f"{m.group('prefix')}"
+                f"{cls._render_count(actual_count, as_cn=not token.isdigit())}"
+                f"{m.group('suffix')}"
+            )
+
+        return cls._PERSONA_COUNT_RE.sub(_sub_count, text)
 
     def _effective_persona_ref_count_for_daily_selfie(
         self, persona_name: str, providers: list | None = None, only_pid: str = "",
@@ -4026,26 +4076,71 @@ class GiteeAIImagePlugin(Star):
             logger.warning("[daily_selfie] 人格 %s 无参考照", persona_name)
             return None
 
-        # ark_seedream：人设参考图只保留第一张，衣橱参考图照常追加
-        is_ark = self._is_ark_seedream_provider(provider_id)
-        wardrobe_ref_appended = False
-        if is_ark and len(ref_paths) > 1:
-            logger.debug(
-                "[daily_selfie] 人格 %s ark_seedream 仅保留人设参考图 #1（原 %d 张）",
-                persona_name,
-                len(ref_paths),
+        # 人设参考图张数（不含随后追加的衣橱图/部位素材/用户图）。
+        # ark_seedream 只吃第一张——该约束按本次实际命中的 provider 逐次裁剪
+        # （见下方 prepare_images 回调），避免「链路里混了 ark 就把整批都裁了」。
+        persona_ref_count = len(ref_paths)
+
+        # 提示词由 r4 按「链首」的 provider 写成，用与自拍一致的口径算基准张数。
+        # 万一兜底切到别的后端导致人设图张数变化，追加衣橱图后的「参考图N」与
+        # 「以前N张」必须整体平移（见 prepare_prompt），否则编号指向不存在的图。
+        if provider_id:
+            lead_ref_count = self._effective_persona_ref_count(
+                persona_name, self._is_ark_seedream_provider(provider_id)
             )
-            ref_paths = ref_paths[:1]
-        if ref_image_path:
-            p = Path(ref_image_path)
-            if p.exists():
-                ref_paths.append(p)
-                wardrobe_ref_appended = True
+        else:
+            lead_ref_count = self._effective_persona_ref_count(
+                persona_name,
+                self._selfie_chain_lead_is_ark(
+                    self._get_persona_selfie_chain(persona_name)
+                ),
+            )
+
+        # ark 人设图只剩 1 张、且没有衣橱图时，全局只有那 1 张，提示词里的
+        # 「前N张参考图」是冗余表述——统一替换成「参考图」更自然
+        # （有衣橱图时必须保留「前N张」才能把人设图与衣橱图区分开）。
+        if lead_ref_count == 1 and not ref_image_path:
+            base_prompt = re.sub(r"前[三3两2一1\d]+张(?:人设)?参考图", "参考图", prompt)
+        else:
+            base_prompt = prompt
+
+        wardrobe_ref_appended = bool(ref_image_path and Path(ref_image_path).exists())
+        if wardrobe_ref_appended:
+            ref_paths = [*ref_paths, Path(ref_image_path)]
 
         ref_images = await self._read_paths_bytes(ref_paths)
         if not ref_images:
             logger.warning("[daily_selfie] 人格 %s 参考照读取失败", persona_name)
             return None
+
+        def _prepare_images(pid: str) -> list[bytes]:
+            """按本次实际命中的 provider 决定要发的参考图。
+
+            ark_seedream 只接受第一张人设图（衣橱图照常保留），其余后端拿完整列表。
+            """
+            if persona_ref_count > 1 and self._is_ark_seedream_provider(pid):
+                logger.debug(
+                    "[daily_selfie] ark_seedream(%s) 仅保留人设参考图 #1（原 %d 张）",
+                    pid,
+                    persona_ref_count,
+                )
+                return trim_persona_refs(ref_images, persona_ref_count)
+            return ref_images
+
+        def _prepare_prompt(pid: str) -> str:
+            actual_count = self._effective_persona_ref_count(
+                persona_name, self._is_ark_seedream_provider(pid)
+            )
+            if actual_count == lead_ref_count:
+                return base_prompt
+            logger.debug(
+                "[daily_selfie] provider=%s 人设图 %d→%d，参考图编号平移 %+d",
+                pid,
+                lead_ref_count,
+                actual_count,
+                actual_count - lead_ref_count,
+            )
+            return self._shift_ref_index(base_prompt, lead_ref_count, actual_count)
 
         if provider_id:
             backend_override = provider_id
@@ -4069,28 +4164,18 @@ class GiteeAIImagePlugin(Star):
             if persona_conf:
                 persona_default_output = str(persona_conf.get("default_output", "") or "").strip()
 
-        # ark 人设图只剩 1 张，此时"前N张参考图"要么冗余、要么指代不清：
-        # - 没有衣橱图：全局只有那 1 张，"参考图"就是它，替换后更自然
-        #   （"以前三张参考图的少女" → "以参考图的少女"）
-        # - 有衣橱图：参考图 = [人设图#1, 衣橱图#2]，必须保留"前1张"才能把两者区分开，
-        #   否则"以参考图中少女为基准"会被读成"以随附的任意一张参考图为基准"
-        if is_ark and not wardrobe_ref_appended:
-            final_prompt = re.sub(r"前[三3两2一1\d]+张(?:人设)?参考图", "参考图", prompt)
-        else:
-            final_prompt = prompt
-
         if provider_id:
             logger.debug(
                 "[daily_selfie] persona=%s prompt=%s provider=%s (daily_selfie_provider)",
                 persona_name,
-                final_prompt,
+                base_prompt,
                 provider_id,
             )
         else:
             logger.debug(
                 "[daily_selfie] persona=%s prompt=%s providers=%s",
                 persona_name,
-                final_prompt,
+                base_prompt,
                 [str(x.get("provider_id") or "").strip() for x in chain_override if isinstance(x, dict)],
             )
 
@@ -4113,13 +4198,15 @@ class GiteeAIImagePlugin(Star):
                 logger.debug("[daily_selfie] 参考图存在，size覆盖为档位 %s（走方式1，由模型读prompt宽高比）", ref_resolution)
 
         return await self.edit.edit(
-            prompt=final_prompt,
+            prompt=base_prompt,
             images=ref_images,
             backend=backend_override,
             size=ref_resolution,
             resolution=None,
             default_output=persona_default_output,
             chain_override=chain_override,
+            prepare_images=_prepare_images,
+            prepare_prompt=_prepare_prompt,
         )
 
     async def _set_selfie_reference(
