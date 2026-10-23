@@ -146,6 +146,8 @@ class ProviderRegistry:
             return "grok_video_multipart"
         if pid in {"flow2api_video"}:
             return "flow2api_video"
+        if pid in {"minimax_video", "minimax-h3", "minimax_h3"}:
+            return "minimax_video"
         if isinstance(item.get("fallback_chain"), list):
             return "truegrok"
         return ""
@@ -153,6 +155,7 @@ class ProviderRegistry:
     _VIDEO_TEMPLATE_KEYS = frozenset({
         "grok_video", "grok_video_3", "grok_video_multipart",
         "official_grok_video", "grok2api_video", "flow2api_video", "truegrok",
+        "minimax_video",
     })
 
     def _infer_cascade_kind(self, conf: dict) -> str:
@@ -343,6 +346,18 @@ class ProviderRegistry:
                     errors.append(f"provider '{provider_id}' missing api_url")
                 if not str(item.get("model") or "").strip():
                     errors.append(f"provider '{provider_id}' missing model")
+            if template_key in {"minimax_video"}:
+                if not str(item.get("base_url") or "").strip():
+                    errors.append(f"provider '{provider_id}' missing base_url")
+                api_keys = [
+                    str(k).strip()
+                    for k in _as_list(item.get("api_keys"))
+                    if str(k).strip()
+                ]
+                if not api_keys and not str(item.get("api_key") or "").strip():
+                    errors.append(
+                        f"provider '{provider_id}' missing api_key / api_keys"
+                    )
             if template_key in {"vertex_ai_anonymous"}:
                 if not str(item.get("model") or "").strip():
                     errors.append(f"provider '{provider_id}' missing model")
@@ -820,6 +835,9 @@ class ProviderRegistry:
         elif template_key == "grok2api_video":
             from .grok2api_video_service import Grok2ApiVideoService
             backend = Grok2ApiVideoService(settings=p)
+        elif template_key == "minimax_video":
+            from .minimax_video_service import MiniMaxVideoService
+            backend = MiniMaxVideoService(settings=p)
         elif template_key == "flow2api_video":
             settings = {
                 "api_url": p.get("api_url"),

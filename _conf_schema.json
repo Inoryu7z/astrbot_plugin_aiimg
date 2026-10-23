@@ -1909,6 +1909,127 @@
           }
         }
       },
+      "minimax_video": {
+        "name": "MiniMax H3（视频）",
+        "description": "magic666 网关的 MiniMax-H3，首帧生视频，768P，强制带音轨。",
+        "hint": "参考图会先上传到网关对象存储换取公网 URL；输出固定 768P，音频无法关闭。时长 1~15 秒，10 秒约需 7~8 分钟。",
+        "items": {
+          "id": {
+            "type": "string",
+            "description": "服务商 ID（唯一）",
+            "default": "minimax_video"
+          },
+          "label": {
+            "type": "string",
+            "description": "显示名称（可选）",
+            "default": "MiniMax H3"
+          },
+          "base_url": {
+            "type": "string",
+            "description": "网关地址",
+            "hint": "默认 https://magic666.top，内部自动拼 /v1/videos 与 /api/upload/presign",
+            "default": "https://magic666.top"
+          },
+          "api_keys": {
+            "type": "list",
+            "description": "API Key 列表（取第一个）",
+            "hint": "也可改用下方单个 api_key 字段",
+            "default": [],
+            "obvious_hint": true
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API Key（单个，优先于列表）",
+            "default": "",
+            "obvious_hint": true
+          },
+          "model": {
+            "type": "string",
+            "description": "模型名称",
+            "hint": "固定 MiniMax-H3；minimax-h3 系列历史名会被网关归一到同一入口",
+            "default": "MiniMax-H3"
+          },
+          "models": {
+            "type": "list",
+            "description": "模型级联列表（可选，留空则用上方 model 单模型）",
+            "hint": "填入多个模型名按顺序尝试，失败自动切换下一个。例：[\"MiniMax-H3\", \"minimax-h3-pro\"]",
+            "default": []
+          },
+          "ratio": {
+            "type": "string",
+            "description": "视频宽高比",
+            "hint": "网关不支持 adaptive，缺失或不支持的比例会回退 16:9",
+            "options": [
+              "9:16",
+              "16:9",
+              "4:3",
+              "3:4",
+              "1:1",
+              "21:9"
+            ],
+            "default": "9:16"
+          },
+          "duration": {
+            "type": "int",
+            "description": "视频时长(秒)",
+            "hint": "网关接受 1~15；5 秒约 3 分钟，10 秒约 7~8 分钟",
+            "slider": {
+              "min": 1,
+              "max": 15,
+              "step": 1
+            },
+            "default": 5
+          },
+          "resolution": {
+            "type": "string",
+            "description": "视频分辨率（固定 768P）",
+            "hint": "网关只支持 768P，填其它值会被强制纠正",
+            "default": "768P"
+          },
+          "image_role": {
+            "type": "string",
+            "description": "参考图角色",
+            "hint": "first_frame=从这张图开始动（最像原图）；last_frame=作为尾帧；reference_image=只借风格",
+            "options": [
+              "first_frame",
+              "last_frame",
+              "reference_image"
+            ],
+            "default": "first_frame"
+          },
+          "timeout_seconds": {
+            "type": "int",
+            "description": "任务超时(秒)",
+            "slider": {
+              "min": 60,
+              "max": 3600,
+              "step": 30
+            },
+            "default": 900
+          },
+          "polling_interval": {
+            "type": "int",
+            "description": "轮询间隔(秒)",
+            "slider": {
+              "min": 2,
+              "max": 30,
+              "step": 2
+            },
+            "default": 6
+          },
+          "max_retries": {
+            "type": "int",
+            "description": "提交重试次数",
+            "hint": "仅对 429 饱和与 5xx 生效（指数退避 15→60s）；任务内失败不重试",
+            "slider": {
+              "min": 0,
+              "max": 5,
+              "step": 1
+            },
+            "default": 1
+          }
+        }
+      },
       "truegrok": {
         "name": "级联后端（True Grok）",
         "description": "级联模板：多个同类型后端按顺序尝试，失败自动切换。",

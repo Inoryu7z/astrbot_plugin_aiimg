@@ -102,7 +102,7 @@
 
 **图片类**：OpenAI Images、OpenAI ImagesURL、Ark Seedream（Seedream 5.0 pro 专用，修复该模型改图 HTTP 400）、Vercel Seedream（Vercel AI Gateway 上的豆包 Seedream，改图固定按网关契约传参考图、去水印参数自动注入）、OpenAI Chat 图、Gemini Images、Gitee Images、Gitee 异步改图、即梦（豆包）
 
-**视频类**：Grok Video（multipart 中转站）、官方 Grok（视频）、豆包 Seedance
+**视频类**：Grok Video（multipart 中转站）、官方 Grok（视频）、豆包 Seedance、MiniMax H3（magic666 网关，固定 768P、带音轨）
 
 **级联后端**：True Grok（图片或视频皆可，fallback_chain 内最多 8 个同类型后端，依次调用失败自动顺延；kind 自动推断，不支持图片与视频混用、不支持嵌套级联）
 
