@@ -12,6 +12,12 @@ from .output_spec import parse_output
 from .provider_chain import as_dict, as_list, candidates_from_chain
 from .provider_registry import ProviderRegistry
 
+# 火山 ARK 输入文本敏感拦截的错误码（HTTP 400 body 里带）。
+# 这是内容问题不是服务问题：换个 provider / 重试同样的内容大概率还是被拦，
+# 因此连续出现 2 次就直接终止本 provider 的剩余重试与整条兜底链，立刻报错。
+_INPUT_SENSITIVE_MARK = "InputTextSensitiveContentDetected"
+_INPUT_SENSITIVE_STRIKES = 2
+
 
 class EditRouter:
     """Image-to-Image router for v4 config (provider chain + presets)."""
@@ -150,6 +156,9 @@ class EditRouter:
 
         last_error: Exception | None = None
         last_failed_pid: str | None = None
+        # 敏感内容拦截连续计数：成功会直接 return，所以能走到这里说明中间没有成功，
+        # strikes 天然是「连续」的（同 provider 重试或换 provider 都算续上）
+        sensitive_strikes = 0
         t_start = time.perf_counter()
 
         for pid, out_override in candidates:
@@ -231,6 +240,21 @@ class EditRouter:
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
+                    if _INPUT_SENSITIVE_MARK in str(e):
+                        sensitive_strikes += 1
+                        if sensitive_strikes >= _INPUT_SENSITIVE_STRIKES:
+                            logger.info(
+                                "[edit] 连续 %d 次命中敏感内容拦截（InputTextSensitiveContentDetected），"
+                                "终止剩余重试与兜底链",
+                                sensitive_strikes,
+                            )
+                            raise RuntimeError(
+                                f"输入文本疑似包含敏感内容，已被模型服务连续 {sensitive_strikes} 次拒绝，"
+                                f"已终止重试与兜底（last provider: {pid}）: {e}"
+                            ) from e
+                    else:
+                        # 「连续」语义：中间夹了其他错误就重新计数
+                        sensitive_strikes = 0
                     if attempt + 1 < max_attempts:
                         logger.info(
                             "[edit] Provider=%s 第%d次失败: %s，准备重试...",
