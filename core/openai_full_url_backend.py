@@ -90,6 +90,29 @@ def _size_supported_by_seedream_5(size: str) -> bool:
     return 1 / 16 <= w / h <= 16
 
 
+# Seedream 5.0 系官方「档位 × 宽高比 → 像素」映射表（火山文档 seedream-5-0 页）。
+# 与旧模型的 RATIO_SIZE_TABLE（1.5k/4k）数值不同：5.0 的 2K 9:16 是 1584x2816
+# （总像素 4,460,544，在 5.0 上限 4,624,220 内），4K 档不存在。
+# 模型对「方式1档位 + 提示词宽高比」经常不遵守比例，必须提前换算成方式2像素值。
+_SEEDREAM_5_RATIO_TABLE: dict[str, dict[str, str]] = {
+    "1k": {
+        "1:1": "1024x1024", "4:3": "1152x864", "3:4": "864x1152",
+        "16:9": "1424x800", "9:16": "800x1424", "3:2": "1248x832",
+        "2:3": "832x1248", "21:9": "1568x672",
+    },
+    "1.5k": {
+        "1:1": "1536x1536", "4:3": "1792x1344", "3:4": "1344x1792",
+        "16:9": "2048x1152", "9:16": "1152x2048", "3:2": "1872x1248",
+        "2:3": "1248x1872", "21:9": "2352x1008",
+    },
+    "2k": {
+        "1:1": "2048x2048", "4:3": "2368x1776", "3:4": "1776x2368",
+        "16:9": "2816x1584", "9:16": "1584x2816", "3:2": "2496x1664",
+        "2:3": "1664x2496", "21:9": "3136x1344",
+    },
+}
+
+
 def _extract_image_ref(data: Any) -> str | None:
     """Extract first image ref from OpenAI-like response body."""
     if isinstance(data, dict):
@@ -236,8 +259,11 @@ class OpenAIFullURLBackend:
         就换算成该档位下对应比例的像素尺寸，免得提供商不按提示词的比例出图。
         换算不成立（档位不在表里、提示词里没有宽高比）时保持原值，交给提供商处理。
 
-        Seedream 5.0 系只认 1K / 1.5K / 2K 与合规像素值，4K 档的换算结果必然被服务端
-        拒绝，因此对这类模型跳过换算，档位不合规时直接换成自身默认合法尺寸。
+        Seedream 5.0 系走独立路径：只认 1K/1.5K/2K 与合规像素值，4K 档不存在。
+        模型对「档位 + 提示词宽高比」同样经常不遵守比例，因此按 5.0 官方映射表
+        （_SEEDREAM_5_RATIO_TABLE）换算成方式2像素值；档位不合规（如 4096x4096/4K）
+        先落到 default_size 或 2K，再走同一张表换算。显式像素值本身合规时原样保留
+        （方式1与方式2不可混用，像素值自身已确定比例）。
         """
         final_model = str(model or self.default_model or "").strip()
         is_sd5 = _is_seedream_5_model(final_model)
@@ -245,25 +271,36 @@ class OpenAIFullURLBackend:
         raw_size = normalize_size_text(size)
         raw_res = normalize_size_text(resolution)
         tier = raw_size or raw_res or self.default_size
-        if is_sd5 and not _size_supported_by_seedream_5(tier):
-            fallback = self._seedream_5_fallback_size()
-            logger.info(
-                "[OpenAIFullURL] 模型 %s 不支持档位 %s，改用 %s（宽高比交给提示词）",
-                final_model,
-                tier,
-                fallback,
-            )
-            return fallback
+
+        if is_sd5:
+            t = str(tier or "").strip().lower()
+            eff_tier = tier
+            if (
+                t not in ("1k", "1.5k", "2k")
+                and not _size_supported_by_seedream_5(t)
+            ):
+                fallback = self._seedream_5_fallback_size()
+                logger.info(
+                    "[OpenAIFullURL] 模型 %s 不支持档位 %s，改用 %s 后按宽高比换算",
+                    final_model,
+                    tier,
+                    fallback,
+                )
+                t = str(fallback).strip().lower()
+                eff_tier = fallback
+            ratio = extract_prompt_ratio(prompt)
+            pixel = _SEEDREAM_5_RATIO_TABLE.get(t, {}).get(ratio or "")
+            if pixel:
+                logger.info(
+                    "[OpenAIFullURL] Seedream 5.0 按官方映射表换算: %s + %s → %s",
+                    t,
+                    ratio,
+                    pixel,
+                )
+                return pixel
+            return eff_tier
         pixel = resolve_size_from_ratio(prompt, tier)
         if pixel:
-            if is_sd5 and not _size_supported_by_seedream_5(pixel):
-                logger.info(
-                    "[OpenAIFullURL] 模型 %s 不接受换算尺寸 %s，保留档位 %s",
-                    final_model,
-                    pixel,
-                    tier,
-                )
-                return tier
             logger.debug(
                 "[OpenAIFullURL] 按提示词宽高比换算尺寸: %s + %s → %s",
                 tier,
