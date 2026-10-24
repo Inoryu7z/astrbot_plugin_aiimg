@@ -45,6 +45,51 @@ def _looks_like_ark_multi_image_generate_endpoint(url: str) -> bool:
     )
 
 
+# 明确不接受 sequential_image_generation 的模型：字节 Seedream 5.0 系（pro / flash）。
+# 该参数只对旧版多图连续生成模型有效，5.0 系收到即 HTTP 400
+# InvalidParameter: the parameter `sequential_image_generation` is not supported by the current model。
+# 这里按模型名判定，不按 endpoint 猜——同一个火山 endpoint 也可能挂 4.0/4.5（仍需单图参数）。
+_NO_SEQUENTIAL_MODEL_RE = re.compile(
+    r"seedream[-_.]?5([-_.]?0)?([-_.]?(pro|flash))?(\b|$)", re.IGNORECASE
+)
+
+# 只认 1K / 1.5K / 2K 档位与「宽x高」像素值的模型：把 4K 之类的档位打回默认，
+# 否则请求在调大模型之前就被服务端参数校验挡掉。
+_SEEDREAM_5_ALLOWED_SIZE_RE = re.compile(r"^(\d+)\s*[xX*]\s*(\d+)$")
+
+# 5.0 系像素值约束（官方文档：总像素 [1280x720, 2048x2048x1.1025]，宽高比 [1/16, 16]）
+_SEEDREAM_5_MIN_PIXELS = 1280 * 720
+_SEEDREAM_5_MAX_PIXELS = int(2048 * 2048 * 1.1025)
+
+
+def _is_seedream_5_model(model: str) -> bool:
+    # 注意：seedream-5-5 这类未来型号也会命中（5 后跟 -/词边界即视为 5.0 系）。
+    # 方向安全：对 5.x 多剥一个参数无害；若后续版本恢复支持该参数，再收紧正则。
+    return bool(_NO_SEQUENTIAL_MODEL_RE.search(str(model or "").strip()))
+
+
+def _size_supported_by_seedream_5(size: str) -> bool:
+    """size 是否在 5.0 系可接受范围内（档位 1K/1.5K/2K 或合规像素值）。
+
+    AUTO 只在图层拆分场景合法，图片生成场景同样会被拒，故不列入。
+    """
+    s = str(size or "").strip()
+    if not s:
+        return True
+    if s.upper() in {"1K", "1.5K", "2K"}:
+        return True
+    m = _SEEDREAM_5_ALLOWED_SIZE_RE.match(s)
+    if not m:
+        return False
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        return False
+    px = w * h
+    if not (_SEEDREAM_5_MIN_PIXELS <= px <= _SEEDREAM_5_MAX_PIXELS):
+        return False
+    return 1 / 16 <= w / h <= 16
+
+
 def _extract_image_ref(data: Any) -> str | None:
     """Extract first image ref from OpenAI-like response body."""
     if isinstance(data, dict):
@@ -181,7 +226,8 @@ class OpenAIFullURLBackend:
         return default
 
     def _resolve_size(
-        self, size: str | None, resolution: str | None, prompt: str = ""
+        self, size: str | None, resolution: str | None, prompt: str = "",
+        model: str | None = None,
     ) -> str:
         """决定最终 size。
 
@@ -189,12 +235,35 @@ class OpenAIFullURLBackend:
         再加一层兜底：若最终值是「档位」（如 4k / 1.5k）且提示词里写了「宽高比为X」，
         就换算成该档位下对应比例的像素尺寸，免得提供商不按提示词的比例出图。
         换算不成立（档位不在表里、提示词里没有宽高比）时保持原值，交给提供商处理。
+
+        Seedream 5.0 系只认 1K / 1.5K / 2K 与合规像素值，4K 档的换算结果必然被服务端
+        拒绝，因此对这类模型跳过换算，档位不合规时直接换成自身默认合法尺寸。
         """
+        final_model = str(model or self.default_model or "").strip()
+        is_sd5 = _is_seedream_5_model(final_model)
+
         raw_size = normalize_size_text(size)
         raw_res = normalize_size_text(resolution)
         tier = raw_size or raw_res or self.default_size
+        if is_sd5 and not _size_supported_by_seedream_5(tier):
+            fallback = self._seedream_5_fallback_size()
+            logger.info(
+                "[OpenAIFullURL] 模型 %s 不支持档位 %s，改用 %s（宽高比交给提示词）",
+                final_model,
+                tier,
+                fallback,
+            )
+            return fallback
         pixel = resolve_size_from_ratio(prompt, tier)
         if pixel:
+            if is_sd5 and not _size_supported_by_seedream_5(pixel):
+                logger.info(
+                    "[OpenAIFullURL] 模型 %s 不接受换算尺寸 %s，保留档位 %s",
+                    final_model,
+                    pixel,
+                    tier,
+                )
+                return tier
             logger.debug(
                 "[OpenAIFullURL] 按提示词宽高比换算尺寸: %s + %s → %s",
                 tier,
@@ -237,7 +306,28 @@ class OpenAIFullURLBackend:
         if isinstance(extra_body, dict):
             out.update(extra_body)
         out["watermark"] = False
+        # 模型名校验必须放在合并之后：extra_body 里的 model 会覆盖构造时传入的默认值，
+        # 只有以最终 payload 的 model 为准才判断得准
+        final_model = str(out.get("model") or self.default_model or "").strip()
+        if _is_seedream_5_model(final_model):
+            out.pop("sequential_image_generation", None)
+            size = out.get("size")
+            if size and not _size_supported_by_seedream_5(str(size)):
+                fallback = self._seedream_5_fallback_size()
+                logger.info(
+                    "[OpenAIFullURL] 模型 %s 不支持 size=%s，改用 %s",
+                    final_model,
+                    size,
+                    fallback,
+                )
+                out["size"] = fallback
         return self._strip_local_keys(out)
+
+    def _seedream_5_fallback_size(self) -> str:
+        """5.0 系的尺寸兜底：服务商配的档位合法就沿用，否则 2K（5.0 支持的最高档）。"""
+        if _size_supported_by_seedream_5(self.default_size):
+            return self.default_size
+        return "2K"
 
     async def _post_json(
         self,
@@ -366,6 +456,22 @@ class OpenAIFullURLBackend:
 
         return await self._save_ref(ref, endpoint_url=endpoint_url)
 
+    def _effective_model(self, model: str | None, extra_body: dict | None) -> str:
+        """预合并视角的最终模型名：extra_body 里的 model 会覆盖其他来源，
+        _resolve_size 的模型判定必须与 _merge_payload 用同一个值，否则
+        「默认 5.0 + extra_body 覆盖成 4.0」这类配置会出现 size 判定错位。
+        """
+        for src in (
+            extra_body.get("model") if isinstance(extra_body, dict) else None,
+            self.extra_body.get("model") if isinstance(self.extra_body, dict) else None,
+            model,
+            self.default_model,
+        ):
+            v = str(src or "").strip()
+            if v:
+                return v
+        return ""
+
     async def generate(
         self,
         prompt: str,
@@ -382,7 +488,10 @@ class OpenAIFullURLBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size = self._resolve_size(size, resolution, prompt)
+        final_size = self._resolve_size(
+            size, resolution, prompt,
+            model=self._effective_model(final_model, extra_body),
+        )
         payload: dict[str, Any] = {
             "model": final_model,
             "prompt": (prompt or "").strip() or "a high quality image",
@@ -421,7 +530,13 @@ class OpenAIFullURLBackend:
         if not final_model:
             raise RuntimeError("未配置 model")
 
-        final_size = self._resolve_size(size, resolution, prompt)
+        # 注入闸与 _resolve_size 必须用同一个「预合并视角」的模型名：
+        # sequential 在 merge 之后才注入，此时用 pre-merge 的 final_model 会放行
+        # 「extra_body 把 model 覆盖成 5.0」的请求
+        check_model = self._effective_model(final_model, extra_body)
+        final_size = self._resolve_size(
+            size, resolution, prompt, model=check_model,
+        )
         local_opts = self._collect_local_options(self.extra_body, extra_body)
         edit_mode = str(local_opts.get("__edit_mode") or "auto").strip().lower()
         if not edit_mode or edit_mode == "auto":
@@ -456,7 +571,12 @@ class OpenAIFullURLBackend:
 
             payload = dict(base_payload)
             payload[image_field] = refs if (len(refs) > 1 or single_as_array) else refs[0]
-            if force_single_output and "sequential_image_generation" not in payload:
+            if (
+                force_single_output
+                and "sequential_image_generation" not in payload
+                # Seedream 5.0 系（pro/flash）不支持该参数，收到即 HTTP 400
+                and not _is_seedream_5_model(check_model)
+            ):
                 payload["sequential_image_generation"] = "disabled"
 
             logger.debug(

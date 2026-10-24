@@ -8,7 +8,7 @@ from typing import Any
 from astrbot.api import logger
 
 from .image_format import guess_image_mime_and_ext
-from .openai_full_url_backend import OpenAIFullURLBackend
+from .openai_full_url_backend import OpenAIFullURLBackend, _is_seedream_5_model
 
 
 class VercelSeedreamBackend(OpenAIFullURLBackend):
@@ -28,6 +28,10 @@ class VercelSeedreamBackend(OpenAIFullURLBackend):
             self, payload: dict[str, Any], extra_body: dict | None = None
     ) -> dict[str, Any]:
         out = super()._merge_payload(payload, extra_body)
+        if _is_seedream_5_model(out.get("model")):
+            # Seedream 5.0 系（pro / flash）不支持 sequential_image_generation，
+            # 混进来就是 HTTP 400，显式兜掉
+            out.pop("sequential_image_generation", None)
         # 强制关闭 bytedance 层英文水印：与父类注入的顶层 watermark=False 配合才能彻底去水印
         provider_options = out.get("providerOptions")
         if not isinstance(provider_options, dict):
@@ -66,7 +70,7 @@ class VercelSeedreamBackend(OpenAIFullURLBackend):
         # 必须把 prompt 传给 _resolve_size：父类的兜底换算依赖提示词末尾的
         # 「宽高比为X」（如 4K 档 + 9:16 → 3040x5504）；丢 prompt 会导致
         # 档位被 resolution_to_size 固定成正方形（4K → 4096x4096）
-        final_size = self._resolve_size(size, resolution, prompt)
+        final_size = self._resolve_size(size, resolution, prompt, model=final_model)
 
         # 参考图全部 base64 data-URI 内联，绝不外传到第三方公网
         refs: list[dict[str, str]] = []
