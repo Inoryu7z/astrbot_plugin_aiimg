@@ -118,6 +118,7 @@ class EditRouter:
         chain_override: list | None = None,
         prepare_images: Callable[[str], list[bytes]] | None = None,
         prepare_prompt: Callable[[str], str] | None = None,
+        on_attempt_error: Callable[[str, int, Exception], None] | None = None,
     ) -> Path:
         feature = self._feature_conf()
         if not bool(feature.get("enabled", True)):
@@ -156,6 +157,16 @@ class EditRouter:
 
         last_error: Exception | None = None
         last_failed_pid: str | None = None
+
+        def _report_attempt_error(pid_str: str, attempt_no: int, err: Exception) -> None:
+            """把单次尝试的失败如实上报给调用方；回调自身异常不影响主流程。"""
+            if on_attempt_error is None:
+                return
+            try:
+                on_attempt_error(pid_str, attempt_no, err)
+            except Exception as cb_err:
+                logger.debug("[edit] on_attempt_error 回调异常: %s", cb_err)
+
         # 敏感内容拦截连续计数：成功会直接 return，所以能走到这里说明中间没有成功，
         # strikes 天然是「连续」的（同 provider 重试或换 provider 都算续上）
         sensitive_strikes = 0
@@ -169,6 +180,7 @@ class EditRouter:
             except Exception as e:
                 last_error = e
                 last_failed_pid = pid
+                _report_attempt_error(pid, 0, e)
                 logger.info("[edit] Provider=%s 后端构建失败: %s", pid, e)
                 continue
 
@@ -240,6 +252,7 @@ class EditRouter:
                 except Exception as e:
                     last_error = e
                     last_failed_pid = pid
+                    _report_attempt_error(pid, attempt + 1, e)
                     if _INPUT_SENSITIVE_MARK in str(e):
                         sensitive_strikes += 1
                         if sensitive_strikes >= _INPUT_SENSITIVE_STRIKES:
