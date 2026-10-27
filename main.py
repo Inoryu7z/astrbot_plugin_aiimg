@@ -2032,8 +2032,8 @@ class GiteeAIImagePlugin(Star):
             prefetched_bytes = None
             if not image_url:
                 prefetched_bytes, _ = await self._prefetch_image_from_event(event)
-            # 同步等待视频生成与发送完成，返回成败标志
-            success = await self._async_generate_video(
+            # 同步等待视频生成与发送完成，返回成败标志与失败详情
+            success, fail_detail = await self._async_generate_video(
                 event,
                 extra_prompt,
                 user_id,
@@ -2053,7 +2053,11 @@ class GiteeAIImagePlugin(Star):
                     text="视频已发送给用户，无需调用 send_message_to_user。请以符合你人设的口吻告知用户视频已生成。",
                 )]
             )
-        return self._build_llm_tool_failure_result("视频生成或发送失败，请告知用户")
+        extra = (
+            f"\n失败详情（可据此向用户说明失败原因）：{fail_detail}"
+            if fail_detail else ""
+        )
+        return self._build_llm_tool_failure_result("视频生成或发送失败，请告知用户", extra)
 
     @filter.llm_tool(name="aiimg_wardrobe_preview")
     async def aiimg_wardrobe_preview(self, event: AstrMessageEvent, query: str):
@@ -2694,7 +2698,8 @@ class GiteeAIImagePlugin(Star):
             llm_tool_failure: bool = False,
             image_url: str = "",
             prefetched_image_bytes: bytes | None = None,
-    ) -> None:
+    ) -> tuple[bool, str]:
+        t_start: float | None = None
         try:
             image_bytes: bytes | None = prefetched_image_bytes
             had_image = False
@@ -2762,7 +2767,7 @@ class GiteeAIImagePlugin(Star):
 
             if had_image and not image_bytes:
                 await mark_failed(event)
-                return False
+                return False, "参考图片提取失败，无法生成视频"
 
             t_start = time.perf_counter()
             candidates = (
@@ -2802,12 +2807,15 @@ class GiteeAIImagePlugin(Star):
             t_end = time.perf_counter()
             name = used_pid or "video"
             logger.info(f"[视频] 完成: provider={name}, 耗时={t_end - t_start:.2f}s")
-            return True
+            return True, ""
 
         except Exception as e:
             logger.error(f"[视频] 失败: {e}", exc_info=True)
             await mark_failed(event)
-            return False
+            detail = f"{type(e).__name__}: {e}"
+            if t_start is not None:
+                detail += f"（从任务创建到失败耗时 {time.perf_counter() - t_start:.0f}s）"
+            return False, detail
         finally:
             await self._video_end(user_id)
 
