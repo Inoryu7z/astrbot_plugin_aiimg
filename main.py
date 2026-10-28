@@ -12,6 +12,7 @@ Gitee AI 图像生成插件
 
 import asyncio
 import base64
+import hashlib
 import io
 import re
 import time
@@ -408,6 +409,13 @@ class GiteeAIImagePlugin(Star):
             cache_obj._cache_dir,
         )
 
+    # LLM 工具（aiimg_generate）排队等待并发名额的上限秒数。
+    # 受框架 tool_call_timeout（默认 120s，wait_for 包裹整个工具执行）约束：
+    # 等待 + 生成必须 < 120s，取 60s 留出生成余量。
+    _LLM_TOOL_QUEUE_WAIT_SECONDS = 60
+    # 单条用户消息内 aiimg_generate 受理次数上限（防 LLM 变参连发刷额度）
+    _LLM_TOOL_MAX_GENERATIONS_PER_MESSAGE = 6
+
     def _get_max_user_concurrency(self) -> int:
         v = self._as_int(self.config.get("max_user_concurrency", 2), default=2)
         return max(1, min(10, v))
@@ -426,7 +434,9 @@ class GiteeAIImagePlugin(Star):
             return f"{prefix}:{origin}:{mid}"
         return f"{prefix}:{user_id}"
 
-    async def _begin_user_job(self, user_id: str, *, kind: str) -> bool:
+    async def _begin_user_job(
+        self, user_id: str, *, kind: str, wait_timeout: float = 0
+    ) -> bool:
         user_id = str(user_id or "").strip()
         if not user_id:
             return True
@@ -438,12 +448,16 @@ class GiteeAIImagePlugin(Star):
             limit = self._get_max_user_concurrency()
             store = self._image_inflight
 
-        async with self._concurrency_lock:
-            cur = int(store.get(user_id, 0) or 0)
-            if cur >= limit:
+        deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else None
+        while True:
+            async with self._concurrency_lock:
+                cur = int(store.get(user_id, 0) or 0)
+                if cur < limit:
+                    store[user_id] = cur + 1
+                    return True
+            if deadline is None or time.monotonic() >= deadline:
                 return False
-            store[user_id] = cur + 1
-            return True
+            await asyncio.sleep(0.5)
 
     async def _end_user_job(self, user_id: str, *, kind: str) -> None:
         user_id = str(user_id or "").strip()
@@ -1788,35 +1802,84 @@ class GiteeAIImagePlugin(Star):
         """
         prompt = (prompt or "").strip()
         m = (mode or "auto").strip().lower()
+        b_raw = (backend or "auto").strip()
+        out_raw = (output or "").strip()
+        aid_raw = (asset_id or "").strip()
 
-        # === TTL 去重检查（防止 ToolLoop 重复调用）===
         message_id = (
                 getattr(getattr(event, "message_obj", None), "message_id", "") or ""
         )
         origin = getattr(event, "unified_msg_origin", "") or ""
-        if message_id and origin:
-            if self.debouncer.llm_tool_is_duplicate(message_id, origin):
-                await mark_success(event)
-                return None
-
         user_id = str(event.get_sender_id() or "")
-        request_id = self._debounce_key(event, "aiimg", user_id)
-        if self.debouncer.hit(request_id):
-            await self._signal_llm_tool_failure(event)
-            return self._build_llm_tool_failure_result("请求过于频繁，请稍后再试")
 
-        if not await self._begin_user_job(user_id, kind="image"):
-            await self._signal_llm_tool_failure(event)
-            return self._build_llm_tool_failure_result("当前有图片正在生成中，请稍后再试")
+        # 调用指纹：工具名 + 归一化参数。同消息同指纹才算重复调用，
+        # 不同提示词的合法连续调用（一次生成多张图）不受影响。
+        fingerprint = ""
+        if message_id and origin:
+            fp_raw = "|".join([
+                "aiimg_generate", prompt, m, b_raw.lower(), out_raw,
+                "1" if bool(use_wardrobe) else "0",
+                "1" if bool(use_wardrobe_ref) else "0",
+                "1" if bool(use_asset) else "0",
+                aid_raw,
+            ])
+            fingerprint = hashlib.md5(fp_raw.encode("utf-8")).hexdigest()[:16]
+            if self.debouncer.llm_tool_is_duplicate(message_id, origin, fingerprint):
+                # 返回明确文本而非 None：None 会让框架直接终止整个 ToolLoop
+                # （无最终回复、后续调用全部丢失）。不贴表情、不发失败信号。
+                return mcp.types.CallToolResult(
+                    content=[mcp.types.TextContent(
+                        type="text",
+                        text=(
+                            "重复调用已忽略：相同任务此前已提交过，请勿重复提交本调用。"
+                            "请直接以符合你人设的口吻告知用户任务已在处理中；"
+                            "如需不同结果，请调整提示词后再调用。"
+                        ),
+                    )]
+                )
+            if not self.debouncer.llm_tool_bump_generation(
+                message_id, origin, self._LLM_TOOL_MAX_GENERATIONS_PER_MESSAGE
+            ):
+                # 撤销上面去重检查的登记，保证重试路径稳定走"上限"提示
+                self.debouncer.llm_tool_clear_duplicate(
+                    message_id, origin, fingerprint
+                )
+                return mcp.types.CallToolResult(
+                    content=[mcp.types.TextContent(
+                        type="text",
+                        text=(
+                            f"本轮消息已受理 {self._LLM_TOOL_MAX_GENERATIONS_PER_MESSAGE} 次图片生成，"
+                            "达到单轮上限。请勿继续调用本工具，直接告知用户已有任务处理中、"
+                            "其余可稍后再要。"
+                        ),
+                    )]
+                )
 
-        b_raw = (backend or "auto").strip()
-        target_backend = self.registry.resolve_backend(b_raw, kind="image")
+        # 同轮连发不受人手速防抖限制；防重复由调用指纹与单轮受理上限负责
+        if not await self._begin_user_job(
+            user_id, kind="image", wait_timeout=self._LLM_TOOL_QUEUE_WAIT_SECONDS
+        ):
+            if message_id and origin and fingerprint:
+                # 排队超时未受理：清除去重登记，允许同参重试
+                self.debouncer.llm_tool_clear_duplicate(message_id, origin, fingerprint)
+            await self._signal_llm_tool_failure(event)
+            return self._build_llm_tool_failure_result(
+                "当前图片生成并发已满，请稍后重试本调用，或告知用户稍后再试"
+            )
+
+        try:
+            target_backend = self.registry.resolve_backend(b_raw, kind="image")
+        except Exception:
+            # 名额已占用而后端解析失败：释放名额并清除去重登记（允许重试）
+            await self._end_user_job(user_id, kind="image")
+            if message_id and origin and fingerprint:
+                self.debouncer.llm_tool_clear_duplicate(message_id, origin, fingerprint)
+            raise
         if b_raw and b_raw.lower() != "auto" and target_backend is None:
             logger.warning("[aiimg] 未知 backend 覆盖，回退自动链路: %s", b_raw)
 
-        output = (output or "").strip()
-        size = output if output and "x" in output else None
-        resolution = output if output and size is None else None
+        size = out_raw if out_raw and "x" in out_raw else None
+        resolution = out_raw if out_raw and size is None else None
 
         if self._is_background_generate():
             try:
@@ -1829,7 +1892,10 @@ class GiteeAIImagePlugin(Star):
             task = asyncio.create_task(
                 self._async_llm_tool_generate(
                     event, prompt, m, target_backend, size, resolution, user_id,
-                    use_wardrobe, use_wardrobe_ref, use_asset, asset_id
+                    use_wardrobe, use_wardrobe_ref, use_asset, asset_id,
+                    dedup_fingerprint=fingerprint,
+                    dedup_message_id=message_id,
+                    dedup_origin=origin,
                 )
             )
             self._image_tasks.add(task)
@@ -1844,6 +1910,9 @@ class GiteeAIImagePlugin(Star):
             return await self._finalize_llm_tool_image(event, image_path, prompt=prompt, mode=result_mode, used_pid=used_pid, user_tags=ref_user_tags, text_mode=(m == "text"))
         except Exception as e:
             logger.error(f"[aiimg_generate] 失败: {e}", exc_info=True)
+            if message_id and origin and fingerprint:
+                # 生成失败：清除去重记录，避免 120s 内同参重试被"已在处理中"误拦
+                self.debouncer.llm_tool_clear_duplicate(message_id, origin, fingerprint)
             await self._signal_llm_tool_failure(event)
             return self._build_llm_tool_failure_result(
                 str(e),
@@ -1954,6 +2023,9 @@ class GiteeAIImagePlugin(Star):
         use_wardrobe_ref: bool = True,
         use_asset: bool = True,
         asset_id: str = "",
+        dedup_fingerprint: str = "",
+        dedup_message_id: str = "",
+        dedup_origin: str = "",
     ) -> None:
         try:
             image_path, result_mode, used_pid, ref_user_tags = await self._execute_llm_tool_generate_core(
@@ -1967,10 +2039,20 @@ class GiteeAIImagePlugin(Star):
             if sent:
                 await mark_success(event)
             else:
+                if dedup_fingerprint and dedup_message_id and dedup_origin:
+                    # 发送失败：清除去重记录，允许 LLM 立即重试补发
+                    self.debouncer.llm_tool_clear_duplicate(
+                        dedup_message_id, dedup_origin, dedup_fingerprint
+                    )
                 await self._signal_llm_tool_failure(event)
                 logger.warning("[aiimg][bg] 发送失败: reason=%s", sent.reason)
         except Exception as e:
             logger.error(f"[aiimg_generate][bg] 失败: {e}", exc_info=True)
+            if dedup_fingerprint and dedup_message_id and dedup_origin:
+                # 生成失败：清除去重记录，避免 120s 内同参重试被"已在处理中"误拦
+                self.debouncer.llm_tool_clear_duplicate(
+                    dedup_message_id, dedup_origin, dedup_fingerprint
+                )
             await self._signal_llm_tool_failure(event)
         finally:
             await self._end_user_job(user_id, kind="image")
